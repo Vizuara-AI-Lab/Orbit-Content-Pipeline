@@ -104,7 +104,7 @@ oai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 def fetch_course(course_id: str) -> dict:
     """Read a course document from the production Firestore."""
-    doc = prod_db.collection("courses").document(course_id).get()
+    doc = prod_db.collection("Courses").document(course_id).get()
     if not doc.exists:
         raise ValueError(f"Course {course_id} not found in production DB")
     return {"id": doc.id, **doc.to_dict()}
@@ -112,7 +112,7 @@ def fetch_course(course_id: str) -> dict:
 
 def fetch_lesson(lesson_id: str) -> dict:
     """Read a lesson document from the production Firestore."""
-    doc = prod_db.collection("lessons").document(lesson_id).get()
+    doc = prod_db.collection("Lessons").document(lesson_id).get()
     if not doc.exists:
         raise ValueError(f"Lesson {lesson_id} not found in production DB")
     return {"id": doc.id, **doc.to_dict()}
@@ -245,7 +245,7 @@ def resolve_group_urls(group: dict) -> dict:
     result = {"videoUrl": None, "embedUrl": None, "miroBoardUrl": None, "colabUrls": []}
 
     if group.get("videoId"):
-        doc = prod_db.collection("lessons").document(group["videoId"]).get()
+        doc = prod_db.collection("Lessons").document(group["videoId"]).get()
         if doc.exists:
             data = doc.to_dict()
             embed = data.get("embedUrl", "") or data.get("videoUrl", "")
@@ -255,7 +255,7 @@ def resolve_group_urls(group: dict) -> dict:
                 raise ValueError(f"Video lesson {group['videoId']} has no resolvable URL")
 
     if group.get("miroId"):
-        doc = prod_db.collection("lessons").document(group["miroId"]).get()
+        doc = prod_db.collection("Lessons").document(group["miroId"]).get()
         if doc.exists:
             data = doc.to_dict()
             # Miro embed URL — kept as-is (embedded via iframe in the MIRO NOTES tab)
@@ -264,7 +264,7 @@ def resolve_group_urls(group: dict) -> dict:
             )
 
     for colab_id in group.get("colabIds", []):
-        doc = prod_db.collection("lessons").document(colab_id).get()
+        doc = prod_db.collection("Lessons").document(colab_id).get()
         if doc.exists:
             data = doc.to_dict()
             # Colab is a plain link — NOT embedded. Use the raw URL.
@@ -282,29 +282,29 @@ def resolve_group_urls(group: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_course_state(course_id: str) -> dict:
-    doc = orbit_db.collection("_pipeline_state").document(course_id).get()
+    doc = orbit_db.collection("_PipelineState").document(course_id).get()
     return doc.to_dict() if doc.exists else {}
 
 
 def set_course_state(course_id: str, data: dict):
-    orbit_db.collection("_pipeline_state").document(course_id).set(
+    orbit_db.collection("_PipelineState").document(course_id).set(
         {**data, "updatedAt": SERVER_TIMESTAMP}, merge=True
     )
 
 
 def get_lesson_state(course_id: str, lesson_id: str) -> dict:
-    doc = (orbit_db.collection("_pipeline_state")
+    doc = (orbit_db.collection("_PipelineState")
                    .document(course_id)
-                   .collection("lessons")
+                   .collection("Lessons")
                    .document(lesson_id)
                    .get())
     return doc.to_dict() if doc.exists else {}
 
 
 def set_lesson_state(course_id: str, lesson_id: str, data: dict):
-    (orbit_db.collection("_pipeline_state")
+    (orbit_db.collection("_PipelineState")
              .document(course_id)
-             .collection("lessons")
+             .collection("Lessons")
              .document(lesson_id)
              .set({**data, "updatedAt": SERVER_TIMESTAMP}, merge=True))
 
@@ -546,8 +546,8 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list) -> dict:
     """Generate a mandatory quiz for a topic, covering all its STANDARD lessons."""
     parts = []
     for i, lid in enumerate(lesson_ids):
-        t = orbit_db.collection("transcripts").document(f"{course_id}_{lid}").get().to_dict()
-        l = orbit_db.collection("courses").document(course_id).collection("lessons").document(lid).get().to_dict()
+        t = orbit_db.collection("Transcripts").document(f"{course_id}_{lid}").get().to_dict()
+        l = orbit_db.collection("Courses").document(course_id).collection("Lessons").document(lid).get().to_dict()
         full_text = (t or {}).get("fullText", "")[:MAX_CHARS_PER_LESSON]
         concepts = ", ".join((l or {}).get("keyConcepts", []))
         title = (l or {}).get("title", lid)
@@ -597,8 +597,8 @@ def aggregate_course(course_id: str, course: dict, orbit_topics: list) -> dict:
     all_lesson_ids = [lid for t in orbit_topics for lid in t["lessonIds"] if not lid.startswith("quiz_")]
 
     for lid in all_lesson_ids:
-        l = (orbit_db.collection("courses").document(course_id)
-                     .collection("lessons").document(lid).get())
+        l = (orbit_db.collection("Courses").document(course_id)
+                     .collection("Lessons").document(lid).get())
         if not l.exists:
             continue
         d = l.to_dict()
@@ -630,7 +630,7 @@ def aggregate_course(course_id: str, course: dict, orbit_topics: list) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def write_transcript(course_id: str, lesson_id: str, transcript: dict):
-    orbit_db.collection("transcripts").document(f"{course_id}_{lesson_id}").set({
+    orbit_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").set({
         "courseId": course_id,
         "lessonId": lesson_id,
         **transcript,
@@ -639,7 +639,7 @@ def write_transcript(course_id: str, lesson_id: str, transcript: dict):
 
 
 def write_summary(course_id: str, lesson_id: str, summary: dict):
-    orbit_db.collection("lessonSummaries").document(f"{course_id}_{lesson_id}").set({
+    orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").set({
         "courseId": course_id,
         "lessonId": lesson_id,
         "content": summary.get("content", summary.get("contentRaw", "")),
@@ -659,8 +659,8 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
     `extraction`  — Step 2 LLM extraction output
     """
     lesson_id = group["videoId"]  # Orbit lesson ID = primary video lesson ID
-    (orbit_db.collection("courses").document(course_id)
-             .collection("lessons").document(lesson_id).set({
+    (orbit_db.collection("Courses").document(course_id)
+             .collection("Lessons").document(lesson_id).set({
         "id": lesson_id,
         "courseId": course_id,
         "topicId": topic_id,
@@ -694,8 +694,8 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
     quiz_lesson_id = f"quiz_{topic_id}"
 
     # Quiz document: courses/{courseId}/quizzes/mandatory_{topicId}
-    (orbit_db.collection("courses").document(course_id)
-             .collection("quizzes").document(f"mandatory_{topic_id}").set({
+    (orbit_db.collection("Courses").document(course_id)
+             .collection("Quizzes").document(f"mandatory_{topic_id}").set({
         "id": f"mandatory_{topic_id}",
         "courseId": course_id,
         "topicId": topic_id,
@@ -706,8 +706,8 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
 
     # MANDATORY_QUIZ lesson stub: courses/{courseId}/lessons/quiz_{topicId}
     # This is the node that appears at the end of the topic in lessonIds.
-    (orbit_db.collection("courses").document(course_id)
-             .collection("lessons").document(quiz_lesson_id).set({
+    (orbit_db.collection("Courses").document(course_id)
+             .collection("Lessons").document(quiz_lesson_id).set({
         "id": quiz_lesson_id,
         "courseId": course_id,
         "topicId": topic_id,
@@ -721,7 +721,7 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
 
 def write_course(course_id: str, orbit_fields: dict):
     """Merge Orbit pipeline fields into the existing course document."""
-    orbit_db.collection("courses").document(course_id).set(orbit_fields, merge=True)
+    orbit_db.collection("Courses").document(course_id).set(orbit_fields, merge=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -766,7 +766,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         mark_step_done(course_id, lesson_id, "transcription")
     else:
         print("    [1/4] Transcription already done, loading...")
-        transcript = orbit_db.collection("transcripts").document(f"{course_id}_{lesson_id}").get().to_dict()
+        transcript = orbit_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").get().to_dict()
 
     # ── Step 2: LLM Extraction ───────────────────────────────────────────────
     if "extraction" not in done:
@@ -779,8 +779,8 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         mark_step_done(course_id, lesson_id, "extraction")
     else:
         print("    [2/4] Extraction already done, loading...")
-        extraction = (orbit_db.collection("courses").document(course_id)
-                               .collection("lessons").document(lesson_id).get().to_dict())
+        extraction = (orbit_db.collection("Courses").document(course_id)
+                               .collection("Lessons").document(lesson_id).get().to_dict())
 
     # ── Step 3: Summary Generation ───────────────────────────────────────────
     if "summary" not in done:
@@ -791,7 +791,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         mark_step_done(course_id, lesson_id, "summary")
     else:
         print("    [3/4] Summary already done, loading...")
-        saved = orbit_db.collection("lessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict()
+        saved = orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict()
         summary = {"contentRaw": saved.get("contentRaw", ""), "figureCount": saved.get("figureCount", 0)}
 
     # ── Step 4: Figure Generation ────────────────────────────────────────────
