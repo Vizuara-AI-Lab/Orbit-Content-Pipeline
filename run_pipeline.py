@@ -219,7 +219,7 @@ LESSON_TYPE = "LESSON"
 
 # URLs that are never downloadable video sources — filtered at all stages
 _IGNORED_URL_PATTERNS = re.compile(
-    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us)',
+    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us|veed\.io)',
     re.IGNORECASE
 )
 
