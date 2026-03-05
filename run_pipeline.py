@@ -883,8 +883,9 @@ def run_course(course_id: str):
                 continue
 
             try:
-                process_lesson(course_id, topic_id, group)
-                topic_lesson_ids.append(lesson_id)
+                result = process_lesson(course_id, topic_id, group)
+                if result is not None:
+                    topic_lesson_ids.append(lesson_id)
             except Exception as e:
                 print(f"    [ERROR] Lesson {lesson_id} failed: {e}")
                 traceback.print_exc()
