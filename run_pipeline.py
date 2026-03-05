@@ -39,6 +39,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Resolve yt-dlp from the venv so it works without activating the venv manually
+_VENV_BIN = Path(sys.executable).parent
+YT_DLP = str(_VENV_BIN / "yt-dlp")
+
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
@@ -269,8 +273,6 @@ def resolve_group_urls(group: dict) -> dict:
                 embed = data.get("embedUrl", "")
             else:
                 embed = _extract_url_from_description(data.get("description", ""))
-            if not embed:
-                embed = data.get("embedUrl", "") or data.get("videoUrl", "")
             result["embedUrl"] = embed
             result["videoUrl"] = embed_to_video_url(embed)
 
@@ -279,9 +281,8 @@ def resolve_group_urls(group: dict) -> dict:
         if doc.exists:
             data = doc.to_dict()
             # Miro embed URL — kept as-is (embedded via iframe in the MIRO NOTES tab)
-            result["miroBoardUrl"] = (
-                data.get("embedUrl") or data.get("miroUrl") or data.get("externalToolLink")
-            )
+            if data.get("type") == "MIRO BOARD":
+                result["miroBoardUrl"] = data.get("embedUrl")
 
     for colab_id in group.get("colabIds", []):
         doc = prod_db.collection("Lessons").document(colab_id).get()
@@ -352,7 +353,7 @@ def _download_audio(url: str, output_dir: str) -> str:
         urllib.request.urlretrieve(url, output_path)
     else:
         result = subprocess.run(
-            ["yt-dlp", "--extract-audio", "--audio-format", "mp3",
+            [YT_DLP, "--extract-audio", "--audio-format", "mp3",
              "--audio-quality", "0", "--output", output_path, "--no-playlist", url],
             capture_output=True, text=True
         )
