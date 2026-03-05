@@ -1,0 +1,45 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+*.json
+# Re-include non-secret JSON if needed (e.g. package.json) with:
+# !some-safe-file.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyw
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+MANIFEST
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Temp / pipeline artifacts ─────────────────────────────────────────────────
+*.mp3
+*.mp4
+*.webm
+*.m4a
+*.mkv
+tmp/
+temp/
