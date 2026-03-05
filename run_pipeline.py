@@ -273,8 +273,6 @@ def resolve_group_urls(group: dict) -> dict:
                 embed = data.get("embedUrl", "") or data.get("videoUrl", "")
             result["embedUrl"] = embed
             result["videoUrl"] = embed_to_video_url(embed)
-            if not result["videoUrl"]:
-                raise ValueError(f"Video lesson {group['videoId']} has no resolvable URL")
 
     if group.get("miroId"):
         doc = prod_db.collection("Lessons").document(group["miroId"]).get()
