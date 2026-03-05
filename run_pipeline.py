@@ -569,7 +569,7 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list) -> dict:
     parts = []
     for i, lid in enumerate(lesson_ids):
         t = orbit_db.collection("Transcripts").document(f"{course_id}_{lid}").get().to_dict()
-        l = orbit_db.collection("Courses").document(course_id).collection("Lessons").document(lid).get().to_dict()
+        l = orbit_db.collection("Lessons").document(lid).get().to_dict()
         full_text = (t or {}).get("fullText", "")[:MAX_CHARS_PER_LESSON]
         concepts = ", ".join((l or {}).get("keyConcepts", []))
         title = (l or {}).get("title", lid)
@@ -606,9 +606,9 @@ Return ONLY valid JSON:
 }
 """
 
-def aggregate_course(course_id: str, course: dict, orbit_topics: list) -> dict:
+def aggregate_course(course: dict, orbit_topics: list) -> dict:
     """
-    Reads lesson docs from the Orbit subcollection (written by write_lesson_to_orbit)
+    Reads lesson docs from the Orbit Lessons collection (written by write_lesson_to_orbit)
     to synthesize course-level fields. Updates the existing course document in-place —
     all production DB fields are preserved; only Orbit pipeline fields are set/overwritten.
 
@@ -619,8 +619,7 @@ def aggregate_course(course_id: str, course: dict, orbit_topics: list) -> dict:
     all_lesson_ids = [lid for t in orbit_topics for lid in t["lessonIds"] if not lid.startswith("quiz_")]
 
     for lid in all_lesson_ids:
-        l = (orbit_db.collection("Courses").document(course_id)
-                     .collection("Lessons").document(lid).get())
+        l = orbit_db.collection("Lessons").document(lid).get()
         if not l.exists:
             continue
         d = l.to_dict()
@@ -679,10 +678,10 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
     `urls`        — resolved URLs from resolve_group_urls()
     `video_lesson`— the primary video lesson document from production DB
     `extraction`  — Step 2 LLM extraction output
+    Written to top-level Lessons collection (not a subcollection of Courses).
     """
     lesson_id = group["videoId"]  # Orbit lesson ID = primary video lesson ID
-    (orbit_db.collection("Courses").document(course_id)
-             .collection("Lessons").document(lesson_id).set({
+    orbit_db.collection("Lessons").document(lesson_id).set({
         "id": lesson_id,
         "courseId": course_id,
         "topicId": topic_id,
@@ -705,7 +704,7 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
         "estimatedDurationHours": extraction.get("estimatedDurationHours", 0),
         "createdAt": SERVER_TIMESTAMP,
         "updatedAt": SERVER_TIMESTAMP,
-    }))
+    })
 
 
 def write_quiz(course_id: str, topic_id: str, quiz: dict):
@@ -715,31 +714,30 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
     """
     quiz_lesson_id = f"quiz_{topic_id}"
 
-    # Quiz document: courses/{courseId}/quizzes/mandatory_{topicId}
-    (orbit_db.collection("Courses").document(course_id)
-             .collection("Quizzes").document(f"mandatory_{topic_id}").set({
+    # Quiz document: Quizzes/mandatory_{topicId}
+    orbit_db.collection("Quizzes").document(f"mandatory_{topic_id}").set({
         "id": f"mandatory_{topic_id}",
         "courseId": course_id,
         "topicId": topic_id,
         "sourceLessonIds": quiz["sourceLessonIds"],
         "questions": quiz["questions"],
         "createdAt": SERVER_TIMESTAMP,
-    }))
+    })
 
-    # MANDATORY QUIZ lesson stub: courses/{courseId}/lessons/quiz_{topicId}
+    # MANDATORY QUIZ lesson stub: Lessons/quiz_{topicId}
     # This is the node that appears at the end of the topic in lessonIds.
-    (orbit_db.collection("Courses").document(course_id)
-             .collection("Lessons").document(quiz_lesson_id).set({
+    orbit_db.collection("Lessons").document(quiz_lesson_id).set({
         "id": quiz_lesson_id,
         "courseId": course_id,
         "topicId": topic_id,
         "title": "Topic Quiz",
         "description": "",
         "type": "MANDATORY QUIZ",
+        "duration": {"hours": 0, "minutes": 0},
         "durationAddedToLearningProgress": False,
         "createdAt": SERVER_TIMESTAMP,
         "updatedAt": SERVER_TIMESTAMP,
-    }))
+    })
 
 
 def write_course(course_id: str, orbit_fields: dict):
@@ -802,8 +800,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         mark_step_done(course_id, lesson_id, "extraction")
     else:
         print("    [2/4] Extraction already done, loading...")
-        extraction = (orbit_db.collection("Courses").document(course_id)
-                               .collection("Lessons").document(lesson_id).get().to_dict())
+        extraction = orbit_db.collection("Lessons").document(lesson_id).get().to_dict()
 
     # ── Step 3: Summary Generation ───────────────────────────────────────────
     if "summary" not in done:
@@ -924,7 +921,7 @@ def run_course(course_id: str):
 
     # ── Course-level aggregation ──────────────────────────────────────────────
     print(f"\n  [AGGREGATION] Synthesising course-level fields...")
-    orbit_fields = aggregate_course(course_id, course, orbit_topics)
+    orbit_fields = aggregate_course(course, orbit_topics)
     write_course(course_id, orbit_fields)
 
     total_lessons = sum(len(t["lessonIds"]) - 1 for t in orbit_topics)  # exclude quiz nodes
