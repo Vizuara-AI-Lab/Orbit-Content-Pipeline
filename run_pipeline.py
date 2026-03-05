@@ -353,11 +353,13 @@ def _download_audio(url: str, output_dir: str) -> str:
         import urllib.request
         urllib.request.urlretrieve(url, output_path)
     else:
-        result = subprocess.run(
-            [YT_DLP, "--extract-audio", "--audio-format", "mp3",
-             "--audio-quality", "0", "--output", output_path, "--no-playlist", url],
-            capture_output=True, text=True
-        )
+        cookies_file = Path(__file__).parent / "yt-cookies.txt"
+        cmd = [YT_DLP, "--extract-audio", "--audio-format", "mp3",
+               "--audio-quality", "0", "--output", output_path, "--no-playlist",
+               "--remote-components", "ejs:github"]
+        if cookies_file.exists():
+            cmd += ["--cookies", str(cookies_file)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"yt-dlp failed: {result.stderr[:500]}")
     return output_path

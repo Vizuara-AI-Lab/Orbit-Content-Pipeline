@@ -1,6 +1,7 @@
 # ── Credentials & secrets ─────────────────────────────────────────────────────
 .env
 *.json
+yt-cookies.txt
 # Re-include non-secret JSON if needed (e.g. package.json) with:
 # !some-safe-file.json
 
