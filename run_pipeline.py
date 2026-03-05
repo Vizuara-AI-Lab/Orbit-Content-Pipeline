@@ -353,19 +353,19 @@ def _download_audio(url: str, output_dir: str) -> str:
         import urllib.request
         urllib.request.urlretrieve(url, output_path)
     else:
-        # Use extensionless template so yt-dlp can name the intermediate file freely
-        output_template = os.path.join(output_dir, "audio.%(ext)s")
         cookies_file = Path(__file__).parent / "yt-cookies.txt"
         cmd = [YT_DLP, "--extract-audio", "--audio-format", "mp3",
-               "--audio-quality", "0", "--output", output_template, "--no-playlist",
+               "--audio-quality", "0", "--output", "audio.%(ext)s", "--no-playlist",
                "--remote-components", "ejs:github"]
         if cookies_file.exists():
             cmd += ["--cookies", str(cookies_file)]
         cmd.append(url)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Ensure deno is on PATH for the n-challenge solver
+        env = {**os.environ, "PATH": os.environ.get("PATH", "") + ":/home/teamvizuara/.deno/bin"}
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=output_dir, env=env)
         if result.returncode != 0:
-            raise RuntimeError(f"yt-dlp failed: {result.stderr[:500]}")
-        # yt-dlp writes audio.mp3 after extraction
+            raise RuntimeError(f"yt-dlp failed: {result.stderr[:1000]}")
+        # yt-dlp writes audio.mp3 into output_dir
     return output_path
 
 
