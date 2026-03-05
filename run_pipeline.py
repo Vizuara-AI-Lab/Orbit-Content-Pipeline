@@ -12,7 +12,7 @@ Usage:
     If no course IDs are passed, runs all IDs in COURSE_IDS below.
 
 Prerequisites:
-    pip install firebase-admin openai anthropic requests yt-dlp python-dotenv
+    pip install firebase-admin openai yt-dlp python-dotenv paperbanana
 
 Credentials:
     Place two service account JSON files in this directory:
@@ -21,8 +21,7 @@ Credentials:
 
     Create a .env file (or export env vars):
         OPENAI_API_KEY=sk-...
-        ANTHROPIC_API_KEY=sk-ant-...
-        PAPERBANANA_API_KEY=...
+        GOOGLE_API_KEY=...          ← Gemini key, used by PaperBanana for figure generation
         ORBIT_STORAGE_BUCKET=your-orbit-bucket.appspot.com
 """
 
@@ -45,8 +44,6 @@ from firebase_admin import credentials, firestore, storage
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 import openai
-import anthropic
-import requests
 
 # ─── Course IDs to process ────────────────────────────────────────────────────
 # Replace with your actual course IDs from the production database.
@@ -61,13 +58,26 @@ PROD_SA   = os.getenv("PROD_SERVICE_ACCOUNT",  "prod-service-account.json")
 ORBIT_SA  = os.getenv("ORBIT_SERVICE_ACCOUNT", "orbit-service-account.json")
 ORBIT_BUCKET     = os.environ["ORBIT_STORAGE_BUCKET"]   # required
 OPENAI_API_KEY   = os.environ["OPENAI_API_KEY"]
-ANTHROPIC_API_KEY= os.environ["ANTHROPIC_API_KEY"]
-PAPERBANANA_KEY  = os.getenv("PAPERBANANA_API_KEY", "")
+GOOGLE_API_KEY   = os.getenv("GOOGLE_API_KEY", "")      # Gemini key for PaperBanana
 
-CLAUDE_MODEL          = "claude-opus-4-6"
+LLM_MODEL             = "gpt-4o"
 MAX_TRANSCRIPT_CHARS  = 90_000   # ~22k tokens
 MAX_CHARS_PER_LESSON  = 20_000   # per lesson when building quiz context
 FIGURE_PATTERN        = re.compile(r'\[FIGURE:\s*"([^"]+)"\]')
+
+# Style context injected into every PaperBanana figure request.
+# Encodes Vizuara's teaching-grade visual preferences.
+FIGURE_STYLE_CONTEXT = """
+Visual style requirements (non-negotiable):
+- Teaching-grade clarity. The diagram must be immediately understandable to a student
+  encountering this concept for the first time. Prioritise clarity over completeness.
+- Subtle, muted colour palette. No bright or saturated colours. Use soft, pastel-adjacent
+  tones. The image should feel calm and professional, not eye-catching or vibrant.
+- Minimal text. Labels only where essential. No paragraphs, no bullet lists inside the figure.
+- Zero visual clutter. Generous whitespace. Every element must earn its place.
+- Borders (if used) must be standard width and rendered in a clearly pronounced, dark colour
+  so they are unambiguous against the background.
+"""
 
 # ─── Firebase Initialisation ──────────────────────────────────────────────────
 _prod_app = firebase_admin.initialize_app(
@@ -85,8 +95,7 @@ orbit_db = firestore.client(app=_orbit_app)
 orbit_bucket = storage.bucket(app=_orbit_app)
 
 # ─── API Clients ──────────────────────────────────────────────────────────────
-oai_client   = openai.OpenAI(api_key=OPENAI_API_KEY)
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+oai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +186,7 @@ def group_topic_items(topic: dict) -> list[dict]:
     user = f'Topic: "{topic_title}"\n\nItems:\n{items_repr}'
 
     try:
-        groups = _claude_json_array(GROUPING_SYSTEM, user, max_tokens=1024)
+        groups = _llm_json_array(GROUPING_SYSTEM, user, max_tokens=1024)
         for g in groups:
             g["topicId"] = topic_id
             g["topicTitle"] = topic_title
@@ -400,7 +409,7 @@ computer-vision-basics, nlp-basics, reinforcement-learning-basics
 def llm_extract(transcript: dict, lesson: dict) -> dict:
     full_text = transcript["fullText"][:MAX_TRANSCRIPT_CHARS]
     user = f"Lesson title: {lesson['title']}\n\nTranscript:\n{full_text}"
-    return _claude_json(EXTRACTION_SYSTEM, user, max_tokens=2048)
+    return _llm_json(EXTRACTION_SYSTEM, user, max_tokens=2048)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -436,7 +445,7 @@ def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> d
         "\n".join(f"- {o}" for o in extraction.get("learningOutcomes", [])) +
         f"\n\nChapter markers:\n{markers}\n\nTranscript:\n{full_text}"
     )
-    response = _claude_raw(SUMMARY_SYSTEM, user, max_tokens=4096)
+    response = _llm_raw(SUMMARY_SYSTEM, user, max_tokens=4096)
     return {"contentRaw": response, "figureCount": response.count("[FIGURE:")}
 
 
@@ -475,36 +484,34 @@ def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
 
 
 def _paperbanana_and_upload(description: str, course_id: str, lesson_id: str, index: int) -> str:
-    if not PAPERBANANA_KEY:
-        raise RuntimeError("PAPERBANANA_API_KEY not set")
+    import asyncio
+    from paperbanana import DiagramType, GenerationInput, PaperBananaPipeline
+    from paperbanana.core.config import Settings
 
-    resp = requests.post(
-        "https://api.paperbanana.com/v1/generate",
-        headers={"Authorization": f"Bearer {PAPERBANANA_KEY}", "Content-Type": "application/json"},
-        json={"prompt": description, "style": "educational_diagram", "format": "png",
-              "width": 800, "height": 500},
-        timeout=60
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY not set")
+
+    settings = Settings(
+        vlm_provider="gemini",
+        vlm_model="gemini-2.0-flash",
+        image_provider="google_imagen",
+        image_model="gemini-3-pro-image-preview",
+        refinement_iterations=3,
     )
-    resp.raise_for_status()
-
-    if resp.headers.get("Content-Type", "").startswith("image/"):
-        image_bytes = resp.content
-    else:
-        data = resp.json()
-        image_url = data.get("url") or data.get("image_url")
-        image_bytes = requests.get(image_url, timeout=30).content
+    pipeline = PaperBananaPipeline(settings=settings)
+    result = asyncio.run(pipeline.generate(
+        GenerationInput(
+            source_context=FIGURE_STYLE_CONTEXT + "\n\nDiagram to generate:\n" + description,
+            communicative_intent=description,
+            diagram_type=DiagramType.METHODOLOGY,
+        )
+    ))
 
     storage_path = f"lesson_figures/{course_id}/{lesson_id}/figure_{index:03d}.png"
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(image_bytes)
-        tmp_path = tmp.name
-    try:
-        blob = orbit_bucket.blob(storage_path)
-        blob.upload_from_filename(tmp_path, content_type="image/png")
-        blob.make_public()
-        return blob.public_url
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    blob = orbit_bucket.blob(storage_path)
+    blob.upload_from_filename(result.image_path, content_type="image/png")
+    blob.make_public()
+    return blob.public_url
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -550,7 +557,7 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list) -> dict:
         )
 
     user = f"Topic ID: {topic_id} — {len(lesson_ids)} lesson(s)\n\n" + "\n\n".join(parts)
-    questions = _claude_json_array(QUIZ_SYSTEM, user, max_tokens=4096)
+    questions = _llm_json_array(QUIZ_SYSTEM, user, max_tokens=4096)
 
     # Ensure IDs exist
     for q in questions:
@@ -604,7 +611,7 @@ def aggregate_course(course_id: str, course: dict, orbit_topics: list) -> dict:
         )
 
     user = f"Course title: {course['title']}\n\nLessons:\n" + "\n\n".join(parts)
-    data = _claude_json(AGGREGATION_SYSTEM, user, max_tokens=1024)
+    data = _llm_json(AGGREGATION_SYSTEM, user, max_tokens=1024)
 
     # Merge into existing course document — do not overwrite production DB fields
     return {
@@ -902,29 +909,31 @@ def run_course(course_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CLAUDE HELPERS
+# LLM HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _claude_json(system: str, user: str, max_tokens: int) -> dict:
-    raw = _claude_raw(system, user, max_tokens)
+def _llm_json(system: str, user: str, max_tokens: int) -> dict:
+    raw = _llm_raw(system, user, max_tokens)
     return _parse_json_object(raw)
 
 
-def _claude_json_array(system: str, user: str, max_tokens: int) -> list:
-    raw = _claude_raw(system, user, max_tokens)
+def _llm_json_array(system: str, user: str, max_tokens: int) -> list:
+    raw = _llm_raw(system, user, max_tokens)
     return _parse_json_array(raw)
 
 
-def _claude_raw(system: str, user: str, max_tokens: int) -> str:
+def _llm_raw(system: str, user: str, max_tokens: int) -> str:
     for attempt in range(3):
         try:
-            msg = claude_client.messages.create(
-                model=CLAUDE_MODEL,
+            msg = oai_client.chat.completions.create(
+                model=LLM_MODEL,
                 max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}]
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ]
             )
-            return msg.content[0].text
+            return msg.choices[0].message.content
         except Exception as e:
             if attempt == 2:
                 raise
