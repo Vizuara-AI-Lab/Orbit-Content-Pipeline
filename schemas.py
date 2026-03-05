@@ -132,10 +132,43 @@ class LessonSummary(TypedDict):
 
 
 # ── Courses/{courseId} ────────────────────────────────────────────────────────
-# Pipeline uses merge=True — only these fields are written. All other course
-# fields (title, slug, price, instructorId, etc.) already exist and are preserved.
+# seed_course() copies base fields from prod at the start of each run (merge=True).
+# aggregate_course() / write_course() then merges pipeline-generated fields on top.
+
+class CourseSeededFields(TypedDict):
+    """Copied verbatim from the production course document by seed_course()."""
+    id: str
+    title: str
+    slug: str
+    description: str
+    duration: object            # Duration
+    thumbnail: Optional[str]
+    regularPrice: float
+    salePrice: float
+    pricingModel: str           # PricingModel enum value
+    subscriptionPlans: Optional[list]
+    categoryIds: list[str]
+    targetAudienceIds: list[str]
+    tags: list[str]
+    instructorId: str
+    instructorName: str
+    status: str                 # CourseStatus enum value
+    mode: str                   # CourseMode enum value
+    liveAt: Optional[object]    # Timestamp | null
+    certificateTemplateId: Optional[str]
+    isEnrollmentPaused: bool
+    isMailSendingEnabled: bool
+    isCertificateEnabled: bool
+    isCourseCompletionEnabled: bool
+    customCertificateName: str
+    isForumEnabled: bool
+    isWelcomeMessageEnabled: bool
+    externalToolLink: Optional[str]
+    createdAt: object           # Timestamp
+
 
 class CoursePipelineFields(TypedDict):
+    """Merged on top of CourseSeededFields by write_course() at end of pipeline run."""
     topics: list[OrbitTopic]            # replaces the production Topic[] array
     shortDescription: str
     prerequisites: list[str]            # controlled vocabulary strings

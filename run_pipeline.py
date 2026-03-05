@@ -740,6 +740,30 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
     })
 
 
+def seed_course(course: dict):
+    """
+    Copy base fields from the production course document into Orbit Firestore.
+    Uses merge=True so re-runs are idempotent and never overwrite pipeline-written fields.
+    `topics` is intentionally excluded — the pipeline builds its own OrbitTopic[] structure.
+    """
+    FIELDS = [
+        "title", "slug", "description", "duration", "thumbnail",
+        "regularPrice", "salePrice", "pricingModel", "subscriptionPlans",
+        "categoryIds", "targetAudienceIds", "tags",
+        "instructorId", "instructorName",
+        "status", "mode", "liveAt",
+        "certificateTemplateId",
+        "isEnrollmentPaused", "isMailSendingEnabled",
+        "isCertificateEnabled", "isCourseCompletionEnabled", "customCertificateName",
+        "isForumEnabled", "isWelcomeMessageEnabled",
+        "externalToolLink",
+        "createdAt",
+    ]
+    doc = {k: course[k] for k in FIELDS if k in course}
+    doc["id"] = course["id"]
+    orbit_db.collection("Courses").document(course["id"]).set(doc, merge=True)
+
+
 def write_course(course_id: str, orbit_fields: dict):
     """Merge Orbit pipeline fields into the existing course document."""
     orbit_db.collection("Courses").document(course_id).set(orbit_fields, merge=True)
@@ -851,6 +875,8 @@ def run_course(course_id: str):
         return
 
     print(f"  Found {len(topics)} topic(s)")
+    seed_course(course)
+    print(f"  ✓ Course document seeded in Orbit")
     set_course_state(course_id, {"status": "processing"})
 
     orbit_topics = []  # Built up per topic; written to course doc in aggregation
