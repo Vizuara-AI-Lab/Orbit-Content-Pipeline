@@ -217,9 +217,9 @@ def group_topic_items(topic: dict) -> list[dict]:
 # Only items with this type on the topic item are processed
 LESSON_TYPE = "LESSON"
 
-# Ignore these URL patterns when scanning the description field
+# URLs that are never downloadable video sources — filtered at all stages
 _IGNORED_URL_PATTERNS = re.compile(
-    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us/j/)',
+    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us)',
     re.IGNORECASE
 )
 
@@ -270,7 +270,8 @@ def resolve_group_urls(group: dict) -> dict:
         if doc.exists:
             data = doc.to_dict()
             if data.get("type") == "VIDEO LECTURE":
-                embed = data.get("embedUrl", "")
+                raw = data.get("embedUrl", "")
+                embed = raw if raw and not _IGNORED_URL_PATTERNS.search(raw) else ""
             else:
                 embed = _extract_url_from_description(data.get("description", ""))
             result["embedUrl"] = embed
