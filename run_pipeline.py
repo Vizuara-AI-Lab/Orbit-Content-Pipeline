@@ -726,7 +726,7 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
         "createdAt": SERVER_TIMESTAMP,
     }))
 
-    # MANDATORY_QUIZ lesson stub: courses/{courseId}/lessons/quiz_{topicId}
+    # MANDATORY QUIZ lesson stub: courses/{courseId}/lessons/quiz_{topicId}
     # This is the node that appears at the end of the topic in lessonIds.
     (orbit_db.collection("Courses").document(course_id)
              .collection("Lessons").document(quiz_lesson_id).set({
@@ -734,7 +734,8 @@ def write_quiz(course_id: str, topic_id: str, quiz: dict):
         "courseId": course_id,
         "topicId": topic_id,
         "title": "Topic Quiz",
-        "type": "MANDATORY_QUIZ",
+        "description": "",
+        "type": "MANDATORY QUIZ",
         "durationAddedToLearningProgress": False,
         "createdAt": SERVER_TIMESTAMP,
         "updatedAt": SERVER_TIMESTAMP,
