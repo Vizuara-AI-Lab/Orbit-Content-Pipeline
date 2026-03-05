@@ -359,6 +359,7 @@ def _download_audio(url: str, output_dir: str) -> str:
                "--remote-components", "ejs:github"]
         if cookies_file.exists():
             cmd += ["--cookies", str(cookies_file)]
+        cmd.append(url)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"yt-dlp failed: {result.stderr[:500]}")
