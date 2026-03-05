@@ -156,27 +156,26 @@ def group_topic_items(topic: dict) -> list[dict]:
     Each group: { title, videoId, miroId, colabIds, topicId, topicTitle }
     Uses an LLM to cluster production DB items (which may be split by type)
     into logical Orbit lessons.
+    Only items with type == LESSON_TYPE are considered.
     """
-    items = topic.get("items", [])
+    items = [it for it in topic.get("items", []) if it.get("type") == LESSON_TYPE]
     topic_id = topic["id"]
     topic_title = topic.get("title", "")
 
     if not items:
         return []
 
-    # If there's only one item and it's a video, no LLM needed
+    # Single item — treat it as the sole video lesson, no LLM needed
     if len(items) == 1:
         item = items[0]
-        if item.get("type") in VIDEO_TYPES:
-            return [{
-                "title": item.get("title", topic_title),
-                "videoId": item["id"],
-                "miroId": None,
-                "colabIds": [],
-                "topicId": topic_id,
-                "topicTitle": topic_title,
-            }]
-        return []
+        return [{
+            "title": item.get("title", topic_title),
+            "videoId": item["id"],
+            "miroId": None,
+            "colabIds": [],
+            "topicId": topic_id,
+            "topicTitle": topic_title,
+        }]
 
     # Build a compact representation for the LLM
     items_repr = json.dumps([
@@ -197,7 +196,7 @@ def group_topic_items(topic: dict) -> list[dict]:
         return groups
     except Exception as e:
         print(f"  [WARN] Grouping LLM failed for topic '{topic_title}': {e}")
-        # Fallback: treat each video item as its own solo lesson
+        # Fallback: treat each item as its own solo lesson
         return [
             {
                 "title": item.get("title", topic_title),
@@ -208,12 +207,30 @@ def group_topic_items(topic: dict) -> list[dict]:
                 "topicTitle": topic_title,
             }
             for item in items
-            if item.get("type") in VIDEO_TYPES
         ]
 
 
-# Types recognised as primary video content in the production DB
-VIDEO_TYPES = ("video", "lesson", "content", "lecture")
+# Only items with this type on the topic item are processed
+LESSON_TYPE = "LESSON"
+
+# Ignore these URL patterns when scanning the description field
+_IGNORED_URL_PATTERNS = re.compile(
+    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us/j/)',
+    re.IGNORECASE
+)
+
+
+def _extract_url_from_description(description: str) -> str:
+    """
+    Scan a lesson description for a usable video URL.
+    Ignores calendar invites, Discord invites, Senja links, and Zoom meeting links.
+    Returns the first valid URL found, or an empty string.
+    """
+    for match in re.finditer(r'https?://\S+', description or ""):
+        url = match.group().rstrip(".,;)")
+        if not _IGNORED_URL_PATTERNS.search(url):
+            return url
+    return ""
 
 
 def embed_to_video_url(embed: str) -> str:
@@ -248,7 +265,12 @@ def resolve_group_urls(group: dict) -> dict:
         doc = prod_db.collection("Lessons").document(group["videoId"]).get()
         if doc.exists:
             data = doc.to_dict()
-            embed = data.get("embedUrl", "") or data.get("videoUrl", "")
+            if data.get("type") == "VIDEO LECTURE":
+                embed = data.get("embedUrl", "")
+            else:
+                embed = _extract_url_from_description(data.get("description", ""))
+            if not embed:
+                embed = data.get("embedUrl", "") or data.get("videoUrl", "")
             result["embedUrl"] = embed
             result["videoUrl"] = embed_to_video_url(embed)
             if not result["videoUrl"]:
