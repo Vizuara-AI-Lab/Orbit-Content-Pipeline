@@ -67,6 +67,7 @@ GOOGLE_API_KEY   = os.getenv("GOOGLE_API_KEY", "")      # Gemini key for PaperBa
 LLM_MODEL             = "gpt-4o"
 MAX_TRANSCRIPT_CHARS  = 90_000   # ~22k tokens
 MAX_CHARS_PER_LESSON  = 20_000   # per lesson when building quiz context
+MAX_AUDIT_CHARS       = 60_000   # ~15k tokens — keeps output within gpt-4o's 16k limit
 FIGURE_PATTERN        = re.compile(r'\[FIGURE:\s*"([^"]+)"\]')
 
 # Style context injected into every PaperBanana figure request.
@@ -418,7 +419,39 @@ def _transcribe_chunked(audio_path: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2: LLM EXTRACTION
+# STEP 2: TRANSCRIPT AUDIT
+# ══════════════════════════════════════════════════════════════════════════════
+
+AUDIT_SYSTEM = """
+You are a transcript editor for educational video content on machine learning and AI.
+Correct errors in the auto-generated Whisper transcript below.
+
+Fix:
+- Misheared technical terms, model names, paper titles, author names
+- Mathematical notation (e.g. "eigen values" → "eigenvalues", "relu" → "ReLU")
+- Incorrect word boundaries and obvious punctuation errors
+
+Do NOT:
+- Change the meaning or substance of what was said
+- Remove or add content
+- Rephrase or improve the prose — only fix clear errors
+
+Return ONLY the corrected transcript text, nothing else.
+"""
+
+
+def audit_transcript(transcript: dict, lesson_title: str) -> dict:
+    """LLM-correct Whisper errors in the transcript fullText."""
+    corrected = _llm_raw(
+        AUDIT_SYSTEM,
+        f"Lesson title: {lesson_title}\n\nTranscript:\n{transcript['fullText'][:MAX_AUDIT_CHARS]}",
+        max_tokens=16384,
+    )
+    return {**transcript, "fullText": corrected.strip()}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3: LLM EXTRACTION
 # ══════════════════════════════════════════════════════════════════════════════
 
 EXTRACTION_SYSTEM = """
@@ -447,7 +480,7 @@ def llm_extract(transcript: dict, lesson: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 3: SUMMARY GENERATION
+# STEP 4: SUMMARY GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 SUMMARY_SYSTEM = """
@@ -490,7 +523,7 @@ def _fmt_ts(seconds: float) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 4: FIGURE GENERATION (PaperBanana)
+# STEP 5: FIGURE GENERATION (PaperBanana)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
@@ -816,18 +849,34 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
 
     # ── Step 1: Transcription ────────────────────────────────────────────────
     if "transcription" not in done:
-        print("    [1/4] Transcribing...")
+        print("    [1/5] Transcribing...")
         set_lesson_state(course_id, lesson_id, {"status": "transcribing"})
         transcript = transcribe(urls["videoUrl"])
         write_transcript(course_id, lesson_id, transcript)
         mark_step_done(course_id, lesson_id, "transcription")
     else:
-        print("    [1/4] Transcription already done, loading...")
+        print("    [1/5] Transcription already done, loading...")
         transcript = orbit_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").get().to_dict()
 
-    # ── Step 2: LLM Extraction ───────────────────────────────────────────────
+    # ── Step 2: Transcript Audit ─────────────────────────────────────────────
+    if "audit" not in done:
+        print("    [2/5] Auditing transcript...")
+        set_lesson_state(course_id, lesson_id, {"status": "auditing"})
+        lesson_title = group.get("title") or video_lesson.get("title", "")
+        raw_text = transcript["fullText"]
+        transcript = audit_transcript(transcript, lesson_title)
+        orbit_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").update({
+            "rawFullText": raw_text,
+            "fullText": transcript["fullText"],
+            "audited": True,
+        })
+        mark_step_done(course_id, lesson_id, "audit")
+    else:
+        print("    [2/5] Audit already done.")
+
+    # ── Step 3: LLM Extraction ───────────────────────────────────────────────
     if "extraction" not in done:
-        print("    [2/4] Extracting metadata...")
+        print("    [3/5] Extracting metadata...")
         set_lesson_state(course_id, lesson_id, {"status": "extracting"})
         lesson_meta = {**video_lesson, "title": group.get("title") or video_lesson.get("title", "")}
         extraction = llm_extract(transcript, lesson_meta)
@@ -835,30 +884,30 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         write_lesson_to_orbit(course_id, topic_id, group, urls, video_lesson, extraction)
         mark_step_done(course_id, lesson_id, "extraction")
     else:
-        print("    [2/4] Extraction already done, loading...")
+        print("    [3/5] Extraction already done, loading...")
         extraction = orbit_db.collection("Lessons").document(lesson_id).get().to_dict()
 
-    # ── Step 3: Summary Generation ───────────────────────────────────────────
+    # ── Step 4: Summary Generation ───────────────────────────────────────────
     if "summary" not in done:
-        print("    [3/4] Generating summary...")
+        print("    [4/5] Generating summary...")
         set_lesson_state(course_id, lesson_id, {"status": "summarizing"})
         lesson_title = group.get("title") or video_lesson.get("title", "")
         summary = generate_summary(transcript, extraction, lesson_title)
         mark_step_done(course_id, lesson_id, "summary")
     else:
-        print("    [3/4] Summary already done, loading...")
+        print("    [4/5] Summary already done, loading...")
         saved = orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict()
         summary = {"contentRaw": saved.get("contentRaw", ""), "figureCount": saved.get("figureCount", 0)}
 
-    # ── Step 4: Figure Generation ────────────────────────────────────────────
+    # ── Step 5: Figure Generation ────────────────────────────────────────────
     if "figures" not in done:
-        print(f"    [4/4] Generating {summary['figureCount']} figures...")
+        print(f"    [5/5] Generating {summary['figureCount']} figures...")
         set_lesson_state(course_id, lesson_id, {"status": "figures"})
         final_summary = generate_figures(course_id, lesson_id, summary)
         write_summary(course_id, lesson_id, final_summary)
         mark_step_done(course_id, lesson_id, "figures")
     else:
-        print("    [4/4] Figures already done.")
+        print("    [5/5] Figures already done.")
 
     set_lesson_state(course_id, lesson_id, {"status": "done"})
     print(f"    ✓ Lesson complete")
