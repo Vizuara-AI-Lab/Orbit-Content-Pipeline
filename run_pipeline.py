@@ -82,6 +82,8 @@ Visual style requirements (non-negotiable):
 - Zero visual clutter. Generous whitespace. Every element must earn its place.
 - Borders (if used) must be standard width and rendered in a clearly pronounced, dark colour
   so they are unambiguous against the background.
+- Spelling is absolutely non-negotiable. Every word, label, and annotation must be spelled
+  correctly. A spelling mistake renders the diagram unusable.
 """
 
 # ─── Firebase Initialisation ──────────────────────────────────────────────────
@@ -526,6 +528,35 @@ def _fmt_ts(seconds: float) -> str:
 # STEP 5: FIGURE GENERATION (PaperBanana)
 # ══════════════════════════════════════════════════════════════════════════════
 
+FIGURE_BRIEF_SYSTEM = """
+You are a technical diagram director for an educational platform teaching machine learning and AI.
+
+You will be given a short placeholder description of a diagram and the surrounding lesson text
+where the diagram will appear.
+
+Write a precise, detailed diagram brief for an AI image generator. Specify:
+- What entities, steps, or components should appear
+- How they relate or connect (flow, hierarchy, comparison, etc.)
+- What labels or annotations are essential for student understanding
+- What concept the diagram must make visually obvious
+
+Rules:
+- Be specific and visual — describe what should literally appear on the diagram
+- Do not describe colours, style, or aesthetics (handled separately)
+- 3-6 sentences maximum
+- Return ONLY the diagram brief, nothing else
+"""
+
+
+def _enrich_figure_description(raw_description: str, surrounding_context: str) -> str:
+    """Use an LLM to expand a one-line figure placeholder into a detailed diagram brief."""
+    user = (
+        f"Placeholder description: {raw_description}\n\n"
+        f"Surrounding lesson text:\n{surrounding_context}"
+    )
+    return _llm_raw(FIGURE_BRIEF_SYSTEM, user, max_tokens=512).strip()
+
+
 def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
     content = summary["contentRaw"]
     seen = {}
@@ -535,8 +566,13 @@ def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
         description = match.group(1)
         if description in seen:
             return seen[description]
+        # Extract surrounding text to give the enrichment LLM context
+        ctx_start = max(0, match.start() - 600)
+        ctx_end   = min(len(content), match.end() + 600)
+        surrounding = content[ctx_start:match.start()] + content[match.end():ctx_end]
+        enriched = _enrich_figure_description(description, surrounding)
         try:
-            url = _paperbanana_and_upload(description, course_id, lesson_id, index[0])
+            url = _paperbanana_and_upload(enriched, course_id, lesson_id, index[0])
             md = f"![{description[:60]}]({url})"
             seen[description] = md
             index[0] += 1
