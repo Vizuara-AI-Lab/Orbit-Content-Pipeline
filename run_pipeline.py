@@ -591,7 +591,7 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list) -> dict:
         )
 
     user = f"Topic ID: {topic_id} — {len(lesson_ids)} lesson(s)\n\n" + "\n\n".join(parts)
-    questions = _llm_json_array(QUIZ_SYSTEM, user, max_tokens=4096)
+    questions = _llm_json_array(QUIZ_SYSTEM, user, max_tokens=8192)
 
     # Ensure IDs exist
     for q in questions:
@@ -947,6 +947,7 @@ def run_course(course_id: str):
                 print(f"    [QUIZ] ✓ Quiz written ({len(quiz['questions'])} questions)")
             except Exception as e:
                 print(f"    [WARN] Quiz generation for topic '{topic_title}' failed: {e}")
+                traceback.print_exc()
         else:
             print(f"    [QUIZ] Quiz for topic '{topic_title}' already done, skipping")
 
