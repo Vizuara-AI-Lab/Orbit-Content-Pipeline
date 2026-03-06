@@ -358,7 +358,7 @@ def _download_audio(url: str, output_dir: str) -> str:
     # Whisper accepts webm/m4a/mp4/mp3 so no conversion is needed.
     cookies_file = Path(__file__).parent / "yt-cookies.txt"
     cmd = [YT_DLP, "--format", "bestaudio", "--output", "audio.%(ext)s",
-           "--no-playlist", "--remote-components", "ejs:github"]
+           "--no-playlist", "--fixup", "never", "--remote-components", "ejs:github"]
     if cookies_file.exists():
         cmd += ["--cookies", str(cookies_file)]
     cmd.append(url)
