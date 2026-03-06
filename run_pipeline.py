@@ -404,11 +404,11 @@ def _transcribe_chunked(audio_path: str) -> dict:
     chunk_dir.mkdir(exist_ok=True)
     subprocess.run(
         ["ffmpeg", "-i", audio_path, "-f", "segment", "-segment_time", "600",
-         "-c", "copy", str(chunk_dir / "chunk_%03d.mp3")],
+         "-c", "copy", str(chunk_dir / "chunk_%03d.mp4")],
         check=True, capture_output=True
     )
     all_segments, offset = [], 0.0
-    for chunk in sorted(chunk_dir.glob("chunk_*.mp3")):
+    for chunk in sorted(chunk_dir.glob("chunk_*.mp4")):
         result = _transcribe_single(str(chunk))
         for seg in result["segments"]:
             all_segments.append({**seg, "start": seg["start"] + offset, "end": seg["end"] + offset})
