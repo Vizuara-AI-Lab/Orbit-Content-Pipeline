@@ -348,25 +348,31 @@ def transcribe(video_url: str) -> dict:
 
 
 def _download_audio(url: str, output_dir: str) -> str:
-    output_path = os.path.join(output_dir, "audio.mp3")
     if _is_direct_file(url):
+        output_path = os.path.join(output_dir, "audio.mp3")
         import urllib.request
         urllib.request.urlretrieve(url, output_path)
-    else:
-        cookies_file = Path(__file__).parent / "yt-cookies.txt"
-        cmd = [YT_DLP, "--extract-audio", "--audio-format", "mp3",
-               "--audio-quality", "0", "--output", "audio.%(ext)s", "--no-playlist",
-               "--remote-components", "ejs:github"]
-        if cookies_file.exists():
-            cmd += ["--cookies", str(cookies_file)]
-        cmd.append(url)
-        # Ensure deno is on PATH for the n-challenge solver
-        env = {**os.environ, "PATH": os.environ.get("PATH", "") + ":/home/teamvizuara/.deno/bin"}
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=output_dir, env=env)
-        if result.returncode != 0:
-            raise RuntimeError(f"yt-dlp failed: {result.stderr[:1000]}")
-        # yt-dlp writes audio.mp3 into output_dir
-    return output_path
+        return output_path
+
+    # Download best audio stream without ffmpeg postprocessing.
+    # Whisper accepts webm/m4a/mp4/mp3 so no conversion is needed.
+    cookies_file = Path(__file__).parent / "yt-cookies.txt"
+    cmd = [YT_DLP, "--format", "bestaudio", "--output", "audio.%(ext)s",
+           "--no-playlist", "--remote-components", "ejs:github"]
+    if cookies_file.exists():
+        cmd += ["--cookies", str(cookies_file)]
+    cmd.append(url)
+    # Ensure deno is on PATH for the n-challenge solver
+    env = {**os.environ, "PATH": os.environ.get("PATH", "") + ":/home/teamvizuara/.deno/bin"}
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=output_dir, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed: {result.stderr[:1000]}")
+
+    # Find whichever audio file was written (e.g. audio.webm, audio.m4a)
+    for f in Path(output_dir).iterdir():
+        if f.stem == "audio":
+            return str(f)
+    raise RuntimeError("yt-dlp succeeded but no audio file found in output dir")
 
 
 def _is_direct_file(url: str) -> bool:
