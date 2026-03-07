@@ -489,16 +489,23 @@ SUMMARY_SYSTEM = """
 You are an expert technical writer. Write a comprehensive long-form lesson summary
 from the lecture transcript and metadata provided.
 
-Requirements:
-- Cover all key concepts with clear prose explanations
-- Define new terms on first use
-- Include important formulas in LaTeX notation where helpful
-- Structure sections around the chapter markers (use them as ## headings)
-- At points where a diagram would significantly aid understanding, insert:
+Output format: LaTeX body content ONLY.
+- No preamble. No \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
+- Use \\section{} and \\subsection{} for structure, based on the chapter markers provided.
+- Use standard LaTeX math environments for all equations:
+    Inline: $x = y$
+    Display: \\[ E = mc^2 \\]
+    Numbered: \\begin{equation} ... \\end{equation}
+- Escape all special characters outside math and commands:
+    & → \\&    % → \\%    # → \\#    _ → \\_    ~ → \\textasciitilde{}
+- Only use commands from these packages (pre-loaded in the template):
+    graphicx, amsmath, amssymb, hyperref, booktabs, enumitem, float
+- At points where a diagram would significantly aid understanding, insert on its own line:
   [FIGURE: "precise, visual description for an image generation API"]
-  (on its own line, 2-6 figures total, distributed throughout)
+  (2-6 figures total, distributed throughout)
+- Cover all key concepts with clear prose. Define new terms on first use.
 
-Return ONLY the summary text — no preamble, no JSON. Start with the first ## heading.
+Return ONLY the LaTeX body — no preamble, no JSON, no markdown. Start with the first \\section{}.
 """
 
 def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> dict:
@@ -573,10 +580,16 @@ def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
         enriched = _enrich_figure_description(description, surrounding)
         try:
             url = _paperbanana_and_upload(enriched, course_id, lesson_id, index[0])
-            md = f"![{description[:60]}]({url})"
-            seen[description] = md
+            latex = (
+                f"\\begin{{figure}}[H]\n"
+                f"  \\centering\n"
+                f"  \\includegraphics[width=0.85\\textwidth]{{{url}}}\n"
+                f"  \\caption{{{description}}}\n"
+                f"\\end{{figure}}"
+            )
+            seen[description] = latex
             index[0] += 1
-            return md
+            return latex
         except Exception as e:
             print(f"  [WARN] Figure {index[0]} failed: {e}")
             index[0] += 1
@@ -747,6 +760,7 @@ def write_summary(course_id: str, lesson_id: str, summary: dict):
         "content": summary.get("content", summary.get("contentRaw", "")),
         "contentRaw": summary.get("contentRaw", ""),
         "figureCount": summary.get("figureCount", 0),
+        "format": "latex",
         "createdAt": SERVER_TIMESTAMP,
     })
 
