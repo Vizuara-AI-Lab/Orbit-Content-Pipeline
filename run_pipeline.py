@@ -958,7 +958,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         mark_step_done(course_id, lesson_id, "summary")
     else:
         print("    [4/5] Summary already done, loading...")
-        saved = orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict()
+        saved = orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict() or {}
         summary = {
             "contentLatex":    saved.get("contentRaw", ""),
             "contentMarkdown": saved.get("contentMarkdownRaw", ""),
