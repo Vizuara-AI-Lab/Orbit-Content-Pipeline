@@ -1115,24 +1115,37 @@ def _llm_raw(system: str, user: str, max_tokens: int) -> str:
             time.sleep(2 ** attempt)
 
 
+def _fix_json_escapes(text: str) -> str:
+    """Fix invalid JSON escape sequences (e.g. LaTeX backslashes like \frac, \alpha)."""
+    return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
+
+
 def _parse_json_object(text: str) -> dict:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        raise ValueError(f"No JSON object found in LLM response: {text[:200]}")
+    for candidate in [text, _fix_json_escapes(text)]:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            match = re.search(r'\{.*\}', candidate, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+    raise ValueError(f"No JSON object found in LLM response: {text[:200]}")
 
 
 def _parse_json_array(text: str) -> list:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r'\[.*\]', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        raise ValueError(f"No JSON array found in LLM response: {text[:200]}")
+    for candidate in [text, _fix_json_escapes(text)]:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            match = re.search(r'\[.*\]', candidate, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+    raise ValueError(f"No JSON array found in LLM response: {text[:200]}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
