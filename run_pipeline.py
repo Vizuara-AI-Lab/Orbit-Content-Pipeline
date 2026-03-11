@@ -489,23 +489,28 @@ SUMMARY_SYSTEM = """
 You are an expert technical writer. Write a comprehensive long-form lesson summary
 from the lecture transcript and metadata provided.
 
-Output format: LaTeX body content ONLY.
-- No preamble. No \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
-- Use \\section{} and \\subsection{} for structure, based on the chapter markers provided.
-- Use standard LaTeX math environments for all equations:
-    Inline: $x = y$
-    Display: \\[ E = mc^2 \\]
-    Numbered: \\begin{equation} ... \\end{equation}
-- Escape all special characters outside math and commands:
-    & → \\&    % → \\%    # → \\#    _ → \\_    ~ → \\textasciitilde{}
-- Only use commands from these packages (pre-loaded in the template):
-    graphicx, amsmath, amssymb, hyperref, booktabs, enumitem, float
-- At points where a diagram would significantly aid understanding, insert on its own line:
-  [FIGURE: "precise, visual description for an image generation API"]
-  (2-6 figures total, distributed throughout)
-- Cover all key concepts with clear prose. Define new terms on first use.
+Generate BOTH of the following formats covering identical content:
 
-Return ONLY the LaTeX body — no preamble, no JSON, no markdown. Start with the first \\section{}.
+1. LaTeX body (field "latex"):
+   - No preamble. No \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
+   - Use \\section{} and \\subsection{} based on the chapter markers provided.
+   - Use proper LaTeX math: inline $...$, display \\[...\\], \\begin{equation}...\\end{equation}
+   - Escape special characters outside math: & → \\&  % → \\%  # → \\#  _ → \\_  ~ → \\textasciitilde{}
+   - Only use packages: graphicx, amsmath, amssymb, hyperref, booktabs, enumitem, float
+
+2. Markdown body (field "markdown"):
+   - Use ## and ### headings based on the chapter markers provided.
+   - Use standard Markdown math: inline $...$ and display $$...$$
+   - Use standard Markdown formatting (bold, italic, tables, lists, code blocks)
+
+Rules for BOTH:
+- Cover all key concepts with clear prose. Define new terms on first use.
+- At equivalent points in both versions, insert on its own line:
+  [FIGURE: "precise, visual description for an image generation API"]
+  (2-6 figures total; the same placeholders must appear in both formats)
+
+Return ONLY valid JSON — no preamble, no markdown fences:
+{"latex": "...", "markdown": "..."}
 """
 
 def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> dict:
@@ -521,8 +526,14 @@ def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> d
         "\n".join(f"- {o}" for o in extraction.get("learningOutcomes", [])) +
         f"\n\nChapter markers:\n{markers}\n\nTranscript:\n{full_text}"
     )
-    response = _llm_raw(SUMMARY_SYSTEM, user, max_tokens=4096)
-    return {"contentRaw": response, "figureCount": response.count("[FIGURE:")}
+    response = _llm_json(SUMMARY_SYSTEM, user, max_tokens=8192)
+    latex    = response.get("latex", "")
+    markdown = response.get("markdown", "")
+    return {
+        "contentLatex":    latex,
+        "contentMarkdown": markdown,
+        "figureCount":     latex.count("[FIGURE:"),
+    }
 
 
 def _fmt_ts(seconds: float) -> str:
@@ -565,7 +576,9 @@ def _enrich_figure_description(raw_description: str, surrounding_context: str) -
 
 
 def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
-    content = summary["contentRaw"]
+    # Process the Markdown version — figures become ![alt](url) image tags.
+    # The LaTeX version (contentLatex) is passed through unchanged as contentRaw.
+    content = summary["contentMarkdown"]
     seen = {}
     index = [0]
 
@@ -580,23 +593,22 @@ def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
         enriched = _enrich_figure_description(description, surrounding)
         try:
             url = _paperbanana_and_upload(enriched, course_id, lesson_id, index[0])
-            latex = (
-                f"\\begin{{figure}}[H]\n"
-                f"  \\centering\n"
-                f"  \\includegraphics[width=0.85\\textwidth]{{{url}}}\n"
-                f"  \\caption{{{description}}}\n"
-                f"\\end{{figure}}"
-            )
-            seen[description] = latex
+            md = f"![{description[:60]}]({url})"
+            seen[description] = md
             index[0] += 1
-            return latex
+            return md
         except Exception as e:
             print(f"  [WARN] Figure {index[0]} failed: {e}")
             index[0] += 1
             return f"<!-- figure failed: {description[:80]} -->"
 
     final = FIGURE_PATTERN.sub(replace, content)
-    return {"content": final, "contentRaw": content, "figureCount": len(seen)}
+    return {
+        "content":            final,                        # Markdown with resolved images
+        "contentRaw":         summary["contentLatex"],      # LaTeX with [FIGURE:] placeholders
+        "contentMarkdownRaw": content,                      # Markdown with [FIGURE:] placeholders
+        "figureCount":        len(seen),
+    }
 
 
 def _paperbanana_and_upload(description: str, course_id: str, lesson_id: str, index: int) -> str:
@@ -757,10 +769,10 @@ def write_summary(course_id: str, lesson_id: str, summary: dict):
     orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").set({
         "courseId": course_id,
         "lessonId": lesson_id,
-        "content": summary.get("content", summary.get("contentRaw", "")),
-        "contentRaw": summary.get("contentRaw", ""),
-        "figureCount": summary.get("figureCount", 0),
-        "format": "latex",
+        "content":            summary.get("content", ""),             # Markdown with resolved images
+        "contentRaw":         summary.get("contentRaw", ""),          # LaTeX with [FIGURE:] placeholders
+        "contentMarkdownRaw": summary.get("contentMarkdownRaw", ""),  # Markdown with [FIGURE:] placeholders
+        "figureCount":        summary.get("figureCount", 0),
         "createdAt": SERVER_TIMESTAMP,
     })
 
@@ -947,7 +959,11 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
     else:
         print("    [4/5] Summary already done, loading...")
         saved = orbit_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict()
-        summary = {"contentRaw": saved.get("contentRaw", ""), "figureCount": saved.get("figureCount", 0)}
+        summary = {
+            "contentLatex":    saved.get("contentRaw", ""),
+            "contentMarkdown": saved.get("contentMarkdownRaw", ""),
+            "figureCount":     saved.get("figureCount", 0),
+        }
 
     # ── Step 5: Figure Generation ────────────────────────────────────────────
     if "figures" not in done:
