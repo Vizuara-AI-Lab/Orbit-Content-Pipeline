@@ -1132,13 +1132,47 @@ def _llm_raw(system: str, user: str, max_tokens: int) -> str:
             time.sleep(2 ** attempt)
 
 
+def _strip_fences(text: str) -> str:
+    """Remove markdown code fences (```json ... ``` or ``` ... ```)."""
+    return re.sub(r'^```[a-z]*\n?', '', text.strip(), flags=re.IGNORECASE).rstrip('`').strip()
+
+
 def _fix_json_escapes(text: str) -> str:
     """Fix invalid JSON escape sequences (e.g. LaTeX backslashes like \frac, \alpha)."""
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
 
 
+def _fix_literal_newlines(text: str) -> str:
+    """Escape literal newlines inside JSON string values."""
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == '\\':
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif ch == '\n' and in_string:
+            result.append('\\n')
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
 def _parse_json_object(text: str) -> dict:
-    for candidate in [text, _fix_json_escapes(text)]:
+    candidates = [text, _strip_fences(text)]
+    all_candidates = []
+    for c in candidates:
+        all_candidates.append(c)
+        all_candidates.append(_fix_literal_newlines(c))
+        all_candidates.append(_fix_json_escapes(c))
+        all_candidates.append(_fix_json_escapes(_fix_literal_newlines(c)))
+    for candidate in all_candidates:
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
@@ -1152,7 +1186,14 @@ def _parse_json_object(text: str) -> dict:
 
 
 def _parse_json_array(text: str) -> list:
-    for candidate in [text, _fix_json_escapes(text)]:
+    candidates = [text, _strip_fences(text)]
+    all_candidates = []
+    for c in candidates:
+        all_candidates.append(c)
+        all_candidates.append(_fix_literal_newlines(c))
+        all_candidates.append(_fix_json_escapes(c))
+        all_candidates.append(_fix_json_escapes(_fix_literal_newlines(c)))
+    for candidate in all_candidates:
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
