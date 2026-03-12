@@ -577,15 +577,16 @@ def _enrich_figure_description(raw_description: str, surrounding_context: str) -
 
 def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
     # Process the Markdown version — figures become ![alt](url) image tags.
-    # The LaTeX version (contentLatex) is passed through unchanged as contentRaw.
+    # Collect description→url so the same URLs can be embedded in the LaTeX version.
     content = summary["contentMarkdown"]
-    seen = {}
+    latex   = summary["contentLatex"]
+    desc_to_url = {}   # description → resolved URL
     index = [0]
 
     def replace(match):
         description = match.group(1)
-        if description in seen:
-            return seen[description]
+        if description in desc_to_url:
+            return f"![{description[:60]}]({desc_to_url[description]})"
         # Extract surrounding text to give the enrichment LLM context
         ctx_start = max(0, match.start() - 600)
         ctx_end   = min(len(content), match.end() + 600)
@@ -593,21 +594,37 @@ def generate_figures(course_id: str, lesson_id: str, summary: dict) -> dict:
         enriched = _enrich_figure_description(description, surrounding)
         try:
             url = _paperbanana_and_upload(enriched, course_id, lesson_id, index[0])
-            md = f"![{description[:60]}]({url})"
-            seen[description] = md
+            desc_to_url[description] = url
             index[0] += 1
-            return md
+            return f"![{description[:60]}]({url})"
         except Exception as e:
             print(f"  [WARN] Figure {index[0]} failed: {e}")
             index[0] += 1
             return f"<!-- figure failed: {description[:80]} -->"
 
-    final = FIGURE_PATTERN.sub(replace, content)
+    final_md = FIGURE_PATTERN.sub(replace, content)
+
+    def replace_latex(match):
+        description = match.group(1)
+        url = desc_to_url.get(description)
+        if not url:
+            return f"% figure failed: {description[:80]}"
+        caption = description[:120].replace("{", r"\{").replace("}", r"\}")
+        return (
+            f"\\begin{{figure}}[H]\n"
+            f"\\centering\n"
+            f"\\includegraphics[width=\\linewidth]{{{url}}}\n"
+            f"\\caption{{{caption}}}\n"
+            f"\\end{{figure}}"
+        )
+
+    final_latex = FIGURE_PATTERN.sub(replace_latex, latex)
+
     return {
-        "content":            final,                        # Markdown with resolved images
-        "contentRaw":         summary["contentLatex"],      # LaTeX with [FIGURE:] placeholders
-        "contentMarkdownRaw": content,                      # Markdown with [FIGURE:] placeholders
-        "figureCount":        len(seen),
+        "content":            final_md,     # Markdown with resolved images
+        "contentRaw":         final_latex,  # LaTeX with resolved \begin{figure}[H] blocks
+        "contentMarkdownRaw": content,      # Markdown with [FIGURE:] placeholders
+        "figureCount":        len(desc_to_url),
     }
 
 
