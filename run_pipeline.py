@@ -500,8 +500,7 @@ LaTeX body rules:
   [FIGURE: "precise, visual description for an image generation API"]
   (2-6 figures total)
 
-Return ONLY valid JSON — no preamble, no markdown fences:
-{"latex": "..."}
+Return ONLY the raw LaTeX body — no JSON, no markdown fences, no preamble.
 """
 
 SUMMARY_MARKDOWN_SYSTEM = """
@@ -515,8 +514,7 @@ Markdown body rules:
 - Cover all the same content and concepts as the LaTeX version.
 - Preserve every [FIGURE: "..."] placeholder at the exact equivalent point, with identical text.
 
-Return ONLY valid JSON — no preamble, no markdown fences:
-{"markdown": "..."}
+Return ONLY the raw Markdown body — no JSON, no markdown fences.
 """
 
 def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> dict:
@@ -532,11 +530,8 @@ def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> d
         "\n".join(f"- {o}" for o in extraction.get("learningOutcomes", [])) +
         f"\n\nChapter markers:\n{markers}\n\nTranscript:\n{full_text}"
     )
-    latex_response = _llm_json(SUMMARY_LATEX_SYSTEM, user, max_tokens=16384)
-    latex = latex_response.get("latex", "")
-
-    markdown_response = _llm_json(SUMMARY_MARKDOWN_SYSTEM, latex, max_tokens=16384)
-    markdown = markdown_response.get("markdown", "")
+    latex = _llm_raw(SUMMARY_LATEX_SYSTEM, user, max_tokens=16384)
+    markdown = _llm_raw(SUMMARY_MARKDOWN_SYSTEM, latex, max_tokens=16384)
     return {
         "contentLatex":    latex,
         "contentMarkdown": markdown,
