@@ -485,32 +485,38 @@ def llm_extract(transcript: dict, lesson: dict) -> dict:
 # STEP 4: SUMMARY GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-SUMMARY_SYSTEM = """
+SUMMARY_LATEX_SYSTEM = """
 You are an expert technical writer. Write a comprehensive long-form lesson summary
-from the lecture transcript and metadata provided.
+in LaTeX from the lecture transcript and metadata provided.
 
-Generate BOTH of the following formats covering identical content:
-
-1. LaTeX body (field "latex"):
-   - No preamble. No \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
-   - Use \\section{} and \\subsection{} based on the chapter markers provided.
-   - Use proper LaTeX math: inline $...$, display \\[...\\], \\begin{equation}...\\end{equation}
-   - Escape special characters outside math: & → \\&  % → \\%  # → \\#  _ → \\_  ~ → \\textasciitilde{}
-   - Only use packages: graphicx, amsmath, amssymb, hyperref, booktabs, enumitem, float
-
-2. Markdown body (field "markdown"):
-   - Use ## and ### headings based on the chapter markers provided.
-   - Use standard Markdown math: inline $...$ and display $$...$$
-   - Use standard Markdown formatting (bold, italic, tables, lists, code blocks)
-
-Rules for BOTH:
+LaTeX body rules:
+- No preamble. No \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.
+- Use \\section{} and \\subsection{} based on the chapter markers provided.
+- Use proper LaTeX math: inline $...$, display \\[...\\], \\begin{equation}...\\end{equation}
+- Escape special characters outside math: & → \\&  % → \\%  # → \\#  _ → \\_  ~ → \\textasciitilde{}
+- Only use packages: graphicx, amsmath, amssymb, hyperref, booktabs, enumitem, float
 - Cover all key concepts with clear prose. Define new terms on first use.
-- At equivalent points in both versions, insert on its own line:
+- At appropriate points insert on its own line:
   [FIGURE: "precise, visual description for an image generation API"]
-  (2-6 figures total; the same placeholders must appear in both formats)
+  (2-6 figures total)
 
 Return ONLY valid JSON — no preamble, no markdown fences:
-{"latex": "...", "markdown": "..."}
+{"latex": "..."}
+"""
+
+SUMMARY_MARKDOWN_SYSTEM = """
+You are an expert technical writer. Convert the provided LaTeX lesson summary into
+an equivalent Markdown version covering identical content.
+
+Markdown body rules:
+- Use ## and ### headings mirroring the \\section{} and \\subsection{} structure in the LaTeX.
+- Use standard Markdown math: inline $...$ and display $$...$$
+- Use standard Markdown formatting (bold, italic, tables, lists, code blocks)
+- Cover all the same content and concepts as the LaTeX version.
+- Preserve every [FIGURE: "..."] placeholder at the exact equivalent point, with identical text.
+
+Return ONLY valid JSON — no preamble, no markdown fences:
+{"markdown": "..."}
 """
 
 def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> dict:
@@ -526,9 +532,11 @@ def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> d
         "\n".join(f"- {o}" for o in extraction.get("learningOutcomes", [])) +
         f"\n\nChapter markers:\n{markers}\n\nTranscript:\n{full_text}"
     )
-    response = _llm_json(SUMMARY_SYSTEM, user, max_tokens=8192)
-    latex    = response.get("latex", "")
-    markdown = response.get("markdown", "")
+    latex_response = _llm_json(SUMMARY_LATEX_SYSTEM, user, max_tokens=16384)
+    latex = latex_response.get("latex", "")
+
+    markdown_response = _llm_json(SUMMARY_MARKDOWN_SYSTEM, latex, max_tokens=16384)
+    markdown = markdown_response.get("markdown", "")
     return {
         "contentLatex":    latex,
         "contentMarkdown": markdown,
