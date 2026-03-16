@@ -1005,8 +1005,11 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
     return extraction
 
 
+_PREVIEW_URL_PATTERN = re.compile(r'(youtube\.com|youtu\.be|vimeo\.com)', re.IGNORECASE)
+
+
 def _get_first_lesson_video_url(orbit_topics: list) -> str | None:
-    """Return the videoUrl of the first non-quiz lesson across all topics."""
+    """Return the videoUrl of the first non-quiz lesson with a YouTube or Vimeo URL."""
     for topic in orbit_topics:
         for lesson_id in topic.get("lessonIds", []):
             if lesson_id.startswith("quiz_"):
@@ -1014,7 +1017,7 @@ def _get_first_lesson_video_url(orbit_topics: list) -> str | None:
             doc = orbit_db.collection("Lessons").document(lesson_id).get()
             if doc.exists:
                 url = doc.to_dict().get("videoUrl")
-                if url:
+                if url and _PREVIEW_URL_PATTERN.search(url):
                     return url
     return None
 
