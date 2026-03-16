@@ -1005,6 +1005,20 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
     return extraction
 
 
+def _get_first_lesson_video_url(orbit_topics: list) -> str | None:
+    """Return the videoUrl of the first non-quiz lesson across all topics."""
+    for topic in orbit_topics:
+        for lesson_id in topic.get("lessonIds", []):
+            if lesson_id.startswith("quiz_"):
+                continue
+            doc = orbit_db.collection("Lessons").document(lesson_id).get()
+            if doc.exists:
+                url = doc.to_dict().get("videoUrl")
+                if url:
+                    return url
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # COURSE ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1101,6 +1115,9 @@ def run_course(course_id: str):
     # ── Course-level aggregation ──────────────────────────────────────────────
     print(f"\n  [AGGREGATION] Synthesising course-level fields...")
     orbit_fields = aggregate_course(course, orbit_topics)
+    preview_url = _get_first_lesson_video_url(orbit_topics)
+    if preview_url:
+        orbit_fields["previewUrl"] = preview_url
     write_course(course_id, orbit_fields)
 
     total_lessons = sum(len(t["lessonIds"]) - 1 for t in orbit_topics)  # exclude quiz nodes
