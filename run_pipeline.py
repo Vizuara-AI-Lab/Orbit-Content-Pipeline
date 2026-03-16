@@ -221,8 +221,9 @@ def group_topic_items(topic: dict) -> list[dict]:
 LESSON_TYPE = "LESSON"
 
 # URLs that are never downloadable video sources — filtered at all stages
+# Note: zoom.us/rec/ (cloud recordings) are intentionally allowed through.
 _IGNORED_URL_PATTERNS = re.compile(
-    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us|veed\.io|drive\.google\.com|arxiv\.org)',
+    r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us/j/|veed\.io|drive\.google\.com|arxiv\.org)',
     re.IGNORECASE
 )
 
@@ -238,6 +239,23 @@ def _extract_url_from_description(description: str) -> str:
         if not _IGNORED_URL_PATTERNS.search(url):
             return url
     return ""
+
+
+def _extract_zoom_password(description: str) -> str:
+    """
+    Use an LLM to extract a Zoom recording passcode from a lesson description.
+    Returns the password string, or an empty string if none is found.
+    """
+    if not description or "zoom" not in description.lower():
+        return ""
+    result = _llm_raw(
+        "You extract Zoom recording passcodes from text. "
+        "Return ONLY the passcode string, with no extra words, punctuation, or explanation. "
+        "If no passcode is present, return an empty string.",
+        description,
+        32,
+    )
+    return result.strip()
 
 
 def embed_to_video_url(embed: str) -> str:
@@ -266,19 +284,24 @@ def resolve_group_urls(group: dict) -> dict:
       - colabUrls    (list of plain Colab URLs — one per colabId; open in new tab, never embedded)
     Returns a dict of resolved URLs.
     """
-    result = {"videoUrl": None, "embedUrl": None, "miroBoardUrl": None, "colabUrls": []}
+    result = {"videoUrl": None, "embedUrl": None, "miroBoardUrl": None, "colabUrls": [], "videoPassword": None}
 
     if group.get("videoId"):
         doc = prod_db.collection("Lessons").document(group["videoId"]).get()
         if doc.exists:
             data = doc.to_dict()
+            description = data.get("description", "")
             if data.get("type") == "VIDEO LECTURE":
                 raw = data.get("embedUrl", "")
                 embed = raw if raw and not _IGNORED_URL_PATTERNS.search(raw) else ""
             else:
-                embed = _extract_url_from_description(data.get("description", ""))
+                embed = _extract_url_from_description(description)
             result["embedUrl"] = embed
             result["videoUrl"] = embed_to_video_url(embed)
+            if result["videoUrl"] and "zoom.us/rec/" in result["videoUrl"]:
+                pwd = _extract_zoom_password(description)
+                if pwd:
+                    result["videoPassword"] = pwd
 
     if group.get("miroId"):
         doc = prod_db.collection("Lessons").document(group["miroId"]).get()
@@ -344,13 +367,13 @@ def mark_step_done(course_id: str, lesson_id: str, step: str):
 # STEP 1: TRANSCRIPTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def transcribe(video_url: str) -> dict:
+def transcribe(video_url: str, password: str = None) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
-        audio_path = _download_audio(video_url, tmpdir)
+        audio_path = _download_audio(video_url, tmpdir, password=password)
         return _transcribe_audio(audio_path)
 
 
-def _download_audio(url: str, output_dir: str) -> str:
+def _download_audio(url: str, output_dir: str, password: str = None) -> str:
     if _is_direct_file(url):
         output_path = os.path.join(output_dir, "audio.mp3")
         import urllib.request
@@ -364,6 +387,8 @@ def _download_audio(url: str, output_dir: str) -> str:
            "--no-playlist", "--fixup", "never", "--remote-components", "ejs:github"]
     if cookies_file.exists():
         cmd += ["--cookies", str(cookies_file)]
+    if password:
+        cmd += ["--video-password", password]
     cmd.append(url)
     # Ensure deno is on PATH for the n-challenge solver
     env = {**os.environ, "PATH": os.environ.get("PATH", "") + ":/home/teamvizuara/.deno/bin"}
@@ -930,7 +955,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
     if "transcription" not in done:
         print("    [1/5] Transcribing...")
         set_lesson_state(course_id, lesson_id, {"status": "transcribing"})
-        transcript = transcribe(urls["videoUrl"])
+        transcript = transcribe(urls["videoUrl"], password=urls.get("videoPassword"))
         write_transcript(course_id, lesson_id, transcript)
         mark_step_done(course_id, lesson_id, "transcription")
     else:
