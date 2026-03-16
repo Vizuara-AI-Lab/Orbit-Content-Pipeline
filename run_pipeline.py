@@ -530,8 +530,8 @@ def generate_summary(transcript: dict, extraction: dict, lesson_title: str) -> d
         "\n".join(f"- {o}" for o in extraction.get("learningOutcomes", [])) +
         f"\n\nChapter markers:\n{markers}\n\nTranscript:\n{full_text}"
     )
-    latex = _llm_raw(SUMMARY_LATEX_SYSTEM, user, max_tokens=16384)
-    markdown = _llm_raw(SUMMARY_MARKDOWN_SYSTEM, latex, max_tokens=16384)
+    latex = _strip_fences(_llm_raw(SUMMARY_LATEX_SYSTEM, user, max_tokens=16384))
+    markdown = _strip_fences(_llm_raw(SUMMARY_MARKDOWN_SYSTEM, latex, max_tokens=16384))
     return {
         "contentLatex":    latex,
         "contentMarkdown": markdown,
