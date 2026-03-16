@@ -299,6 +299,11 @@ def resolve_group_urls(group: dict) -> dict:
             if url:
                 result["colabUrls"].append(url)
 
+    # Final safety net — ensure no ignored URL slipped through as a video source
+    if result["videoUrl"] and _IGNORED_URL_PATTERNS.search(result["videoUrl"]):
+        result["videoUrl"] = None
+        result["embedUrl"] = None
+
     return result
 
 
