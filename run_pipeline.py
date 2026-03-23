@@ -136,13 +136,14 @@ Your job: group these items into logical Orbit lessons.
 
 Rules:
 - Each group represents one lesson in the new platform
-- Each group has at most one video and one Miro board, but may have multiple Colab items
-- The video is always the primary item — every group should ideally have a video
-- If a Miro or Colab item clearly belongs to a specific video (same topic, adjacent
+- Each group has at most one video, but may have multiple Miro boards and multiple Colab items
+- The video is the primary item — every group should ideally have a video
+- If Miro boards or Colab items clearly belong to a specific video (same topic, adjacent
   position, matching keywords in titles), pair them in the same group
+- Multiple Miro boards covering the same lesson topic should be grouped together
 - Multiple Colab items that cover the same lesson topic should be grouped together
-- If a Miro or Colab item has no clear video pair, give it its own group with
-  videoId set to null
+- If Miro boards or Colab items have no clear video pair, give them their own group with
+  videoId set to null — this creates a standalone notes/notebook lesson with no video
 - Preserve curriculum order — groups should appear in the same order as the source items
 - Use the source item titles to produce a clean lesson title for each group
 
@@ -151,7 +152,7 @@ Return ONLY a valid JSON array — no prose:
   {
     "title": "Clean lesson title",
     "videoId": "id_string or null",
-    "miroId": "id_string or null",
+    "miroIds": ["id_string", ...],
     "colabIds": ["id_string", ...]
   }
 ]
@@ -172,13 +173,14 @@ def group_topic_items(topic: dict) -> list[dict]:
     if not items:
         return []
 
-    # Single item — treat it as the sole video lesson, no LLM needed
+    # Single item — treat it as its own lesson, no LLM needed
     if len(items) == 1:
         item = items[0]
+        is_miro = item.get("type", "").upper() == "MIRO BOARD"
         return [{
             "title": item.get("title", topic_title),
-            "videoId": item["id"],
-            "miroId": None,
+            "videoId": None if is_miro else item["id"],
+            "miroIds": [item["id"]] if is_miro else [],
             "colabIds": [],
             "topicId": topic_id,
             "topicTitle": topic_title,
@@ -196,10 +198,13 @@ def group_topic_items(topic: dict) -> list[dict]:
         for g in groups:
             g["topicId"] = topic_id
             g["topicTitle"] = topic_title
-            # Normalise: LLM may return colabId (singular) — convert defensively
+            # Normalise: LLM may return singular forms — convert defensively
             if "colabId" in g and "colabIds" not in g:
                 g["colabIds"] = [g.pop("colabId")] if g["colabId"] else []
             g.setdefault("colabIds", [])
+            if "miroId" in g and "miroIds" not in g:
+                g["miroIds"] = [g.pop("miroId")] if g["miroId"] else []
+            g.setdefault("miroIds", [])
         return groups
     except Exception as e:
         print(f"  [WARN] Grouping LLM failed for topic '{topic_title}': {e}")
@@ -207,8 +212,8 @@ def group_topic_items(topic: dict) -> list[dict]:
         return [
             {
                 "title": item.get("title", topic_title),
-                "videoId": item["id"],
-                "miroId": None,
+                "videoId": item["id"] if item.get("type", "").upper() != "MIRO BOARD" else None,
+                "miroIds": [item["id"]] if item.get("type", "").upper() == "MIRO BOARD" else [],
                 "colabIds": [],
                 "topicId": topic_id,
                 "topicTitle": topic_title,
@@ -266,7 +271,7 @@ def resolve_group_urls(group: dict) -> dict:
       - colabUrls    (list of plain Colab URLs — one per colabId; open in new tab, never embedded)
     Returns a dict of resolved URLs.
     """
-    result = {"videoUrl": None, "embedUrl": None, "miroBoardUrl": None, "colabUrls": []}
+    result = {"videoUrl": None, "embedUrl": None, "miroBoardUrls": [], "colabUrls": []}
 
     if group.get("videoId"):
         doc = prod_db.collection("Lessons").document(group["videoId"]).get()
@@ -280,13 +285,15 @@ def resolve_group_urls(group: dict) -> dict:
             result["embedUrl"] = embed
             result["videoUrl"] = embed_to_video_url(embed)
 
-    if group.get("miroId"):
-        doc = prod_db.collection("Lessons").document(group["miroId"]).get()
+    for miro_id in group.get("miroIds", []):
+        doc = prod_db.collection("Lessons").document(miro_id).get()
         if doc.exists:
             data = doc.to_dict()
             # Miro embed URL — kept as-is (embedded via iframe in the MIRO NOTES tab)
             if data.get("type") == "MIRO BOARD":
-                result["miroBoardUrl"] = data.get("embedUrl")
+                url = data.get("embedUrl")
+                if url:
+                    result["miroBoardUrls"].append(url)
 
     for colab_id in group.get("colabIds", []):
         doc = prod_db.collection("Lessons").document(colab_id).get()
@@ -300,6 +307,7 @@ def resolve_group_urls(group: dict) -> dict:
                 result["colabUrls"].append(url)
 
     # Final safety net — ensure no ignored URL slipped through as a video source
+    result["miroBoardUrls"] = [u for u in result["miroBoardUrls"] if not _IGNORED_URL_PATTERNS.search(u)]
     if result["videoUrl"] and _IGNORED_URL_PATTERNS.search(result["videoUrl"]):
         result["videoUrl"] = None
         result["embedUrl"] = None
@@ -504,6 +512,8 @@ LaTeX body rules:
 - At appropriate points insert on its own line:
   [FIGURE: "precise, visual description for an image generation API"]
   (2-6 figures total)
+- STRICT: Do NOT use any Markdown syntax. No ##, **, *, __, >, -, ```, or other Markdown
+  constructs. Use only LaTeX commands for all formatting and structure.
 
 Return ONLY the raw LaTeX body — no JSON, no markdown fences, no preamble.
 """
@@ -518,6 +528,10 @@ Markdown body rules:
 - Use standard Markdown formatting (bold, italic, tables, lists, code blocks)
 - Cover all the same content and concepts as the LaTeX version.
 - Preserve every [FIGURE: "..."] placeholder at the exact equivalent point, with identical text.
+- STRICT: Do NOT use any LaTeX commands outside of math delimiters. No \\section{}, \\begin{},
+  \\end{}, \\textbf{}, \\emph{}, \\item, \\label{}, or any other LaTeX commands. Convert all
+  LaTeX formatting to its Markdown equivalent (e.g. \\textbf{x} → **x**, \\emph{x} → *x*).
+  Math inside $...$ or $$...$$ is the only permitted use of backslash-commands.
 
 Return ONLY the raw Markdown body — no JSON, no markdown fences.
 """
@@ -806,7 +820,7 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
     """
     Write the merged Orbit lesson document to courses/{courseId}/lessons/{lessonId}.
     `topic_id`    — parent OrbitTopic id
-    `group`       — LLM-produced group { title, videoId, miroId, colabIds }
+    `group`       — LLM-produced group { title, videoId, miroIds, colabIds }
     `urls`        — resolved URLs from resolve_group_urls()
     `video_lesson`— the primary video lesson document from production DB
     `extraction`  — Step 2 LLM extraction output
@@ -823,7 +837,7 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
         # Content URLs
         "videoUrl": urls["videoUrl"],
         "embedUrl": urls["embedUrl"],
-        "miroBoardUrl": urls["miroBoardUrl"],    # iframe-embeddable Miro URL
+        "miroBoardUrls": urls["miroBoardUrls"],  # iframe-embeddable Miro URLs
         "colabUrls": urls["colabUrls"],          # plain links — each opens in new tab
         "duration": video_lesson.get("duration"),
         "durationAddedToLearningProgress": True,
@@ -834,6 +848,26 @@ def write_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict
         "chapterMarkers": extraction.get("chapterMarkers", []),
         "difficulty": extraction.get("difficulty", ""),
         "estimatedDurationHours": extraction.get("estimatedDurationHours", 0),
+        "createdAt": SERVER_TIMESTAMP,
+        "updatedAt": SERVER_TIMESTAMP,
+    })
+
+
+def write_miro_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls: dict):
+    """
+    Write a standalone Miro lesson (no video, no summary) to Lessons/{lessonId}.
+    Lesson ID = first miroId.
+    """
+    lesson_id = group["miroIds"][0]
+    orbit_db.collection("Lessons").document(lesson_id).set({
+        "id": lesson_id,
+        "courseId": course_id,
+        "topicId": topic_id,
+        "title": group.get("title", ""),
+        "type": "MIRO NOTES",
+        "description": "",
+        "miroBoardUrls": urls["miroBoardUrls"],
+        "durationAddedToLearningProgress": False,
         "createdAt": SERVER_TIMESTAMP,
         "updatedAt": SERVER_TIMESTAMP,
     })
@@ -907,22 +941,38 @@ def write_course(course_id: str, orbit_fields: dict):
 
 def process_lesson(course_id: str, topic_id: str, group: dict):
     """
-    Process one lesson group (video + optional miro + optional colabs).
-    The group's videoId is used as the Orbit lesson ID.
-    If the group has no videoId (miro/colab-only), it is skipped with a warning.
-    Returns the extraction dict on success, None if skipped.
+    Process one lesson group (video + optional miros + optional colabs, or standalone miros).
+    - STANDARD lesson: videoId is the Orbit lesson ID; runs all 5 pipeline steps.
+    - MIRO NOTES lesson: no video; first miroId is the lesson ID; written directly, no pipeline steps.
+    Returns the lesson_id string on success, None if skipped.
     """
-    lesson_id = group.get("videoId")
-    if not lesson_id:
-        print(f"  → Skipping group '{group.get('title', '')}' — no video")
-        return None
+    video_id  = group.get("videoId")
+    miro_ids  = group.get("miroIds", [])
 
+    # ── Standalone Miro lesson ────────────────────────────────────────────────
+    if not video_id:
+        if not miro_ids:
+            print(f"  → Skipping group '{group.get('title', '')}' — no video or Miro")
+            return None
+        lesson_id  = miro_ids[0]
+        miro_count = len(miro_ids)
+        print(f"  → Miro lesson: {group.get('title', lesson_id)}"
+              + f" [{miro_count} board{'s' if miro_count > 1 else ''}]")
+        urls = resolve_group_urls(group)
+        write_miro_lesson_to_orbit(course_id, topic_id, group, urls)
+        set_lesson_state(course_id, lesson_id, {"status": "done"})
+        print(f"    ✓ Miro lesson complete")
+        return lesson_id
+
+    # ── Standard lesson (video) ───────────────────────────────────────────────
+    lesson_id = video_id
     state = get_lesson_state(course_id, lesson_id)
     done = set(state.get("stepsCompleted", []))
 
+    miro_count  = len(miro_ids)
     colab_count = len(group.get("colabIds", []))
     print(f"  → Lesson: {group.get('title', lesson_id)}"
-          + (f" [+Miro]" if group.get("miroId") else "")
+          + (f" [+{miro_count} Miro]" if miro_count else "")
           + (f" [+{colab_count} Colab]" if colab_count else ""))
 
     # Resolve all URLs from the production DB lesson documents
@@ -1002,7 +1052,7 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
 
     set_lesson_state(course_id, lesson_id, {"status": "done"})
     print(f"    ✓ Lesson complete")
-    return extraction
+    return lesson_id
 
 
 _PREVIEW_URL_PATTERN = re.compile(r'(youtube\.com|youtu\.be|vimeo\.com)', re.IGNORECASE)
@@ -1066,26 +1116,27 @@ def run_course(course_id: str):
         topic_lesson_ids = []  # STANDARD lesson IDs for this topic
 
         for i, group in enumerate(groups):
-            lesson_id = group.get("videoId")
-            if not lesson_id:
-                print(f"    → Group {i+1}/{len(groups)}: '{group.get('title','')}' has no video, skipping")
+            # Primary ID: video if present, otherwise first Miro board
+            primary_id = group.get("videoId") or next(iter(group.get("miroIds", [])), None)
+            if not primary_id:
+                print(f"    → Group {i+1}/{len(groups)}: '{group.get('title','')}' — no video or Miro, skipping")
                 continue
 
-            lesson_state = get_lesson_state(course_id, lesson_id)
+            lesson_state = get_lesson_state(course_id, primary_id)
             if lesson_state.get("status") == "done":
                 print(f"    → Lesson {i+1}/{len(groups)} already done, skipping")
-                topic_lesson_ids.append(lesson_id)
+                topic_lesson_ids.append(primary_id)
                 continue
 
             try:
                 result = process_lesson(course_id, topic_id, group)
                 if result is not None:
-                    topic_lesson_ids.append(lesson_id)
+                    topic_lesson_ids.append(result)
             except Exception as e:
-                print(f"    [ERROR] Lesson {lesson_id} failed: {e}")
+                print(f"    [ERROR] Lesson {primary_id} failed: {e}")
                 traceback.print_exc()
-                set_lesson_state(course_id, lesson_id, {"status": "failed", "error": str(e)})
-                set_course_state(course_id, {"status": "failed", "failedAt": lesson_id})
+                set_lesson_state(course_id, primary_id, {"status": "failed", "error": str(e)})
+                set_course_state(course_id, {"status": "failed", "failedAt": primary_id})
                 raise  # stop the course run — fix and re-run
 
         if not topic_lesson_ids:

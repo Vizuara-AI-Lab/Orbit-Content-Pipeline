@@ -49,7 +49,7 @@ class LessonStandard(TypedDict):
     # Content URLs
     videoUrl: Optional[str]
     embedUrl: Optional[str]
-    miroBoardUrl: Optional[str]     # Miro board, rendered in MIRO NOTES tab via iframe
+    miroBoardUrls: list[str]        # Miro boards, each rendered via iframe in the MIRO NOTES tab
     colabUrls: list[str]            # plain links, each opens in new tab
     # Copied from production DB
     duration: Duration
@@ -61,6 +61,21 @@ class LessonStandard(TypedDict):
     difficulty: Literal["beginner", "intermediate", "advanced"]
     estimatedDurationHours: float
     durationAddedToLearningProgress: Literal[True]
+    createdAt: object   # SERVER_TIMESTAMP
+    updatedAt: object   # SERVER_TIMESTAMP
+
+
+# Written by write_miro_lesson_to_orbit() for standalone Miro lessons (no video, no summary).
+
+class LessonMiroNotes(TypedDict):
+    id: str                         # first miroId from the group
+    courseId: str
+    topicId: str
+    title: str
+    type: Literal["MIRO NOTES"]
+    description: str                # ""
+    miroBoardUrls: list[str]        # one or more Miro embed URLs
+    durationAddedToLearningProgress: Literal[False]
     createdAt: object   # SERVER_TIMESTAMP
     updatedAt: object   # SERVER_TIMESTAMP
 
