@@ -978,6 +978,14 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
     # Resolve all URLs from the production DB lesson documents
     urls = resolve_group_urls(group)
     if not urls["videoUrl"]:
+        if miro_ids:
+            miro_lesson_id = miro_ids[0]
+            print(f"  [WARN] Could not resolve video URL for lesson {lesson_id}, writing as Miro-only")
+            write_miro_lesson_to_orbit(course_id, topic_id, group, urls)
+            set_lesson_state(course_id, miro_lesson_id, {"status": "done"})
+            set_lesson_state(course_id, lesson_id, {"status": "done", "resolvedLessonId": miro_lesson_id})
+            print(f"    ✓ Miro-only lesson complete")
+            return miro_lesson_id
         print(f"  [WARN] Could not resolve video URL for lesson {lesson_id}, skipping")
         return None
 
@@ -1125,7 +1133,7 @@ def run_course(course_id: str):
             lesson_state = get_lesson_state(course_id, primary_id)
             if lesson_state.get("status") == "done":
                 print(f"    → Lesson {i+1}/{len(groups)} already done, skipping")
-                topic_lesson_ids.append(primary_id)
+                topic_lesson_ids.append(lesson_state.get("resolvedLessonId", primary_id))
                 continue
 
             try:
