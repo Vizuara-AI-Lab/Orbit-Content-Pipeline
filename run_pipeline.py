@@ -144,6 +144,9 @@ Rules:
 - Multiple Colab items that cover the same lesson topic should be grouped together
 - If Miro boards or Colab items have no clear video pair, give them their own group with
   videoId set to null — this creates a standalone notes/notebook lesson with no video
+- Each item includes a description that may contain the actual URL — a miro.com URL means Miro,
+  a colab.research.google.com URL means Colab, a YouTube/Vimeo URL means video. Prefer this
+  signal over the type field when they disagree
 - Preserve curriculum order — groups should appear in the same order as the source items
 - Use the source item titles to produce a clean lesson title for each group
 
@@ -176,19 +179,24 @@ def group_topic_items(topic: dict) -> list[dict]:
     # Single item — treat it as its own lesson, no LLM needed
     if len(items) == 1:
         item = items[0]
-        is_miro = item.get("type", "").upper() == "MIRO BOARD"
+        kind = _classify_item(item)
         return [{
             "title": item.get("title", topic_title),
-            "videoId": None if is_miro else item["id"],
-            "miroIds": [item["id"]] if is_miro else [],
-            "colabIds": [],
+            "videoId": item["id"] if kind == "video" else None,
+            "miroIds": [item["id"]] if kind == "miro" else [],
+            "colabIds": [item["id"]] if kind == "colab" else [],
             "topicId": topic_id,
             "topicTitle": topic_title,
         }]
 
     # Build a compact representation for the LLM
     items_repr = json.dumps([
-        {"id": it["id"], "type": it.get("type", ""), "title": it.get("title", "")}
+        {
+            "id": it["id"],
+            "type": it.get("type", ""),
+            "title": it.get("title", ""),
+            "description": it.get("description") or "",
+        }
         for it in items
     ])
     user = f'Topic: "{topic_title}"\n\nItems:\n{items_repr}'
@@ -212,9 +220,9 @@ def group_topic_items(topic: dict) -> list[dict]:
         return [
             {
                 "title": item.get("title", topic_title),
-                "videoId": item["id"] if item.get("type", "").upper() != "MIRO BOARD" else None,
-                "miroIds": [item["id"]] if item.get("type", "").upper() == "MIRO BOARD" else [],
-                "colabIds": [],
+                "videoId": item["id"] if _classify_item(item) == "video" else None,
+                "miroIds": [item["id"]] if _classify_item(item) == "miro" else [],
+                "colabIds": [item["id"]] if _classify_item(item) == "colab" else [],
                 "topicId": topic_id,
                 "topicTitle": topic_title,
             }
@@ -230,6 +238,26 @@ _IGNORED_URL_PATTERNS = re.compile(
     r'(calendar\.google\.com|discord\.(gg|com)|senja\.io|zoom\.us|veed\.io|drive\.google\.com|arxiv\.org)',
     re.IGNORECASE
 )
+
+_MIRO_PATTERN  = re.compile(r'miro\.com', re.IGNORECASE)
+_COLAB_PATTERN = re.compile(r'colab\.research\.google\.com|colab\.google', re.IGNORECASE)
+
+
+def _classify_item(item: dict) -> str:
+    """
+    Classify a lesson item as 'miro', 'colab', or 'video'.
+    Checks embedUrl first, then description, then title — never trusts the type field.
+    """
+    for text in (
+        item.get("embedUrl") or "",
+        item.get("description") or "",
+        item.get("title") or "",
+    ):
+        if _MIRO_PATTERN.search(text):
+            return "miro"
+        if _COLAB_PATTERN.search(text):
+            return "colab"
+    return "video"
 
 
 def _extract_url_from_description(description: str) -> str:
@@ -299,9 +327,15 @@ def resolve_group_urls(group: dict) -> dict:
         doc = prod_db.collection("Lessons").document(colab_id).get()
         if doc.exists:
             data = doc.to_dict()
-            # Colab is a plain link — NOT embedded. Use the raw URL.
-            url = (
-                data.get("externalToolLink") or data.get("embedUrl") or data.get("colabUrl")
+            # Colab URL lives in the lesson description — extract it by pattern.
+            description = data.get("description") or ""
+            url = next(
+                (
+                    m.group().rstrip(".,;)")
+                    for m in re.finditer(r'https?://\S+', description)
+                    if _COLAB_PATTERN.search(m.group())
+                ),
+                None,
             )
             if url:
                 result["colabUrls"].append(url)
