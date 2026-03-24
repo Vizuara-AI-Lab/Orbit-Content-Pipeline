@@ -27,6 +27,7 @@ from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 import run_pipeline
 from run_pipeline import (
     prod_db,
+    orbit_db,
     prod_bucket,
     embed_to_video_url,
     _extract_url_from_description,
@@ -54,19 +55,19 @@ COURSE_IDS = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_course_state(course_id: str) -> dict:
-    doc = prod_db.collection("_PipelineState").document(course_id).get()
+    doc = orbit_db.collection("_PipelineStateProd").document(course_id).get()
     return doc.to_dict() or {} if doc.exists else {}
 
 
 def set_course_state(course_id: str, data: dict):
-    prod_db.collection("_PipelineState").document(course_id).set(
+    orbit_db.collection("_PipelineStateProd").document(course_id).set(
         {**data, "updatedAt": SERVER_TIMESTAMP}, merge=True
     )
 
 
 def get_lesson_state(course_id: str, lesson_id: str) -> dict:
     doc = (
-        prod_db.collection("_PipelineState")
+        orbit_db.collection("_PipelineStateProd")
         .document(course_id)
         .collection("Lessons")
         .document(lesson_id)
@@ -77,7 +78,7 @@ def get_lesson_state(course_id: str, lesson_id: str) -> dict:
 
 def set_lesson_state(course_id: str, lesson_id: str, data: dict):
     (
-        prod_db.collection("_PipelineState")
+        orbit_db.collection("_PipelineStateProd")
         .document(course_id)
         .collection("Lessons")
         .document(lesson_id)
