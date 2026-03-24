@@ -140,10 +140,10 @@ Rules:
 - The video is the primary item — every group should ideally have a video
 - If Miro boards or Colab items clearly belong to a specific video (same topic, adjacent
   position, matching keywords in titles), pair them in the same group
-- Multiple Miro boards covering the same lesson topic should be grouped together
+- Miro boards that have no clear video pair must each become their own standalone group
+  (videoId: null, one miroId per group) — never merge unpaired Miro boards together
 - Multiple Colab items that cover the same lesson topic should be grouped together
-- If Miro boards or Colab items have no clear video pair, give them their own group with
-  videoId set to null — this creates a standalone notes/notebook lesson with no video
+- If Colab items have no clear video pair, give them their own group with videoId set to null
 - Each item includes a description that may contain the actual URL — a miro.com URL means Miro,
   a colab.research.google.com URL means Colab, a YouTube/Vimeo URL means video. Prefer this
   signal over the type field when they disagree
