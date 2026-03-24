@@ -61,6 +61,7 @@ COURSE_IDS = [
 PROD_SA   = os.getenv("PROD_SERVICE_ACCOUNT",  "prod-service-account.json")
 ORBIT_SA  = os.getenv("ORBIT_SERVICE_ACCOUNT", "orbit-service-account.json")
 ORBIT_BUCKET     = os.environ["ORBIT_STORAGE_BUCKET"]   # required
+PROD_BUCKET      = os.getenv("PROD_STORAGE_BUCKET", "") # required for run_content_pipeline
 OPENAI_API_KEY   = os.environ["OPENAI_API_KEY"]
 GOOGLE_API_KEY   = os.getenv("GOOGLE_API_KEY", "")      # Gemini key for PaperBanana
 
@@ -89,6 +90,7 @@ Visual style requirements (non-negotiable):
 # ─── Firebase Initialisation ──────────────────────────────────────────────────
 _prod_app = firebase_admin.initialize_app(
     credentials.Certificate(PROD_SA),
+    {"storageBucket": PROD_BUCKET} if PROD_BUCKET else {},
     name="prod"
 )
 _orbit_app = firebase_admin.initialize_app(
@@ -100,6 +102,7 @@ _orbit_app = firebase_admin.initialize_app(
 prod_db  = firestore.client(app=_prod_app)
 orbit_db = firestore.client(app=_orbit_app)
 orbit_bucket = storage.bucket(app=_orbit_app)
+prod_bucket  = storage.bucket(app=_prod_app) if PROD_BUCKET else None
 
 # ─── API Clients ──────────────────────────────────────────────────────────────
 oai_client = openai.OpenAI(api_key=OPENAI_API_KEY)

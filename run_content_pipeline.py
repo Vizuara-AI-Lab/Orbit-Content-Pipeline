@@ -24,9 +24,10 @@ from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 # Import stateless processing functions and Firebase clients from run_pipeline.
 # Importing it triggers Firebase initialisation — both service account files must exist.
+import run_pipeline
 from run_pipeline import (
     prod_db,
-    orbit_bucket,
+    prod_bucket,
     embed_to_video_url,
     _extract_url_from_description,
     _IGNORED_URL_PATTERNS,
@@ -296,6 +297,10 @@ def run_course(course_id: str):
         return
 
     set_course_state(course_id, {"status": "processing"})
+
+    if not prod_bucket:
+        raise RuntimeError("PROD_STORAGE_BUCKET is not set — required for figure uploads")
+    run_pipeline.orbit_bucket = prod_bucket  # redirect figure uploads to prod storage
 
     lessons = _fetch_valid_lessons(course_id)
     if not lessons:
