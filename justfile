@@ -16,10 +16,15 @@ install:
     @echo "  Reminder: ffmpeg must be installed separately as a system package."
     @echo "  On Debian/Ubuntu:  sudo apt install -y ffmpeg"
 
-# Run the pipeline for one or more course IDs (space-separated)
+# Run the migration pipeline for one or more course IDs (space-separated)
 # Usage: just run course_id_01 course_id_02
 run *course_ids:
     {{ python }} run_pipeline.py {{ course_ids }}
+
+# Run the content pipeline (transcription → summary → quiz) on prod lessons
+# Usage: just content course_id_01 course_id_02
+content *course_ids:
+    {{ python }} run_content_pipeline.py {{ course_ids }}
 
 # Verify that all required tools and env vars are present before running
 check:

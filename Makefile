@@ -1,13 +1,14 @@
 PYTHON := .venv/bin/python
 PIP    := .venv/bin/pip
 
-.PHONY: help install check run
+.PHONY: help install check run content
 
 help:
 	@echo "Usage:"
-	@echo "  make install          Create venv and install all Python dependencies"
-	@echo "  make check            Verify tools and env vars before running"
+	@echo "  make install                    Create venv and install all Python dependencies"
+	@echo "  make check                      Verify tools and env vars before running"
 	@echo "  make run COURSES='course_id_01 course_id_02'"
+	@echo "  make content COURSES='course_id_01 course_id_02'"
 
 install:
 	python3 -m venv .venv
@@ -30,3 +31,6 @@ check:
 
 run:
 	$(PYTHON) run_pipeline.py $(COURSES)
+
+content:
+	$(PYTHON) run_content_pipeline.py $(COURSES)
