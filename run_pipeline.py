@@ -317,11 +317,27 @@ def resolve_group_urls(group: dict) -> dict:
         doc = prod_db.collection("Lessons").document(miro_id).get()
         if doc.exists:
             data = doc.to_dict()
-            # Miro embed URL — kept as-is (embedded via iframe in the MIRO NOTES tab)
-            if data.get("type") == "MIRO BOARD":
-                url = data.get("embedUrl")
-                if url:
-                    result["miroBoardUrls"].append(url)
+            # Miro URL — check embedUrl first, then description, never trust type.
+            url = next(
+                (
+                    candidate
+                    for candidate in (
+                        data.get("embedUrl") or "",
+                        next(
+                            (
+                                m.group().rstrip(".,;)")
+                                for m in re.finditer(r'https?://\S+', data.get("description") or "")
+                                if _MIRO_PATTERN.search(m.group())
+                            ),
+                            "",
+                        ),
+                    )
+                    if _MIRO_PATTERN.search(candidate)
+                ),
+                None,
+            )
+            if url:
+                result["miroBoardUrls"].append(url)
 
     for colab_id in group.get("colabIds", []):
         doc = prod_db.collection("Lessons").document(colab_id).get()
