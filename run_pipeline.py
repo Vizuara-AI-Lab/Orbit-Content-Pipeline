@@ -936,7 +936,7 @@ def write_zoom_lesson_to_orbit(course_id: str, topic_id: str, group: dict, prod_
         "courseId": course_id,
         "topicId": topic_id,
         "title": group.get("title") or prod_lesson.get("title", ""),
-        "type": "ZOOM",
+        "type": "TEXT",
         "description": prod_lesson.get("description", ""),
         "embedUrl": prod_lesson.get("embedUrl", ""),
         "duration": prod_lesson.get("duration"),
