@@ -241,6 +241,7 @@ _IGNORED_URL_PATTERNS = re.compile(
 
 _MIRO_PATTERN  = re.compile(r'miro\.com', re.IGNORECASE)
 _COLAB_PATTERN = re.compile(r'colab\.research\.google\.com|colab\.google', re.IGNORECASE)
+_ZOOM_PATTERN  = re.compile(r'zoom\.us', re.IGNORECASE)
 
 
 def _classify_item(item: dict) -> str:
@@ -923,6 +924,28 @@ def write_miro_lesson_to_orbit(course_id: str, topic_id: str, group: dict, urls:
     })
 
 
+def write_zoom_lesson_to_orbit(course_id: str, topic_id: str, group: dict, prod_lesson: dict):
+    """
+    Copy a Zoom lesson as-is from the production DB to Orbit.
+    No transcription, extraction, or summary — the lesson is preserved verbatim.
+    Lesson ID = videoId.
+    """
+    lesson_id = group["videoId"]
+    orbit_db.collection("Lessons").document(lesson_id).set({
+        "id": lesson_id,
+        "courseId": course_id,
+        "topicId": topic_id,
+        "title": group.get("title") or prod_lesson.get("title", ""),
+        "type": "ZOOM",
+        "description": prod_lesson.get("description", ""),
+        "embedUrl": prod_lesson.get("embedUrl", ""),
+        "duration": prod_lesson.get("duration"),
+        "durationAddedToLearningProgress": False,
+        "createdAt": SERVER_TIMESTAMP,
+        "updatedAt": SERVER_TIMESTAMP,
+    })
+
+
 def write_quiz(course_id: str, topic_id: str, quiz: dict):
     """
     Write the mandatory quiz document and a corresponding MANDATORY_QUIZ lesson
@@ -1025,6 +1048,25 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
           + (f" [+{miro_count} Miro]" if miro_count else "")
           + (f" [+{colab_count} Colab]" if colab_count else ""))
 
+    # ── Zoom lesson check (before URL resolution) ─────────────────────────────
+    prod_lesson_raw = fetch_lesson(lesson_id)
+    _zoom_candidate = next(
+        (
+            text for text in (
+                prod_lesson_raw.get("embedUrl") or "",
+                prod_lesson_raw.get("description") or "",
+            )
+            if _ZOOM_PATTERN.search(text)
+        ),
+        None,
+    )
+    if _zoom_candidate:
+        print(f"    → Zoom lesson detected — copying as-is")
+        write_zoom_lesson_to_orbit(course_id, topic_id, group, prod_lesson_raw)
+        set_lesson_state(course_id, lesson_id, {"status": "done"})
+        print(f"    ✓ Zoom lesson complete")
+        return lesson_id
+
     # Resolve all URLs from the production DB lesson documents
     urls = resolve_group_urls(group)
     if not urls["videoUrl"]:
@@ -1039,8 +1081,8 @@ def process_lesson(course_id: str, topic_id: str, group: dict):
         print(f"  [WARN] Could not resolve video URL for lesson {lesson_id}, skipping")
         return None
 
-    # Fetch the primary video lesson doc for metadata fields
-    video_lesson = fetch_lesson(lesson_id)
+    # Use the already-fetched prod lesson doc for metadata fields
+    video_lesson = prod_lesson_raw
 
     # ── Step 1: Transcription ────────────────────────────────────────────────
     if "transcription" not in done:
