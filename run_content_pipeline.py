@@ -276,6 +276,22 @@ def generate_course_categories(course_id: str, course_title: str, topics: dict[s
     return _llm_json_array(CATEGORY_SYSTEM, user, max_tokens=256)[:5]
 
 
+LESSON_DESCRIPTION_SYSTEM = """
+You are a curriculum designer. Given a lesson title and its transcript, write a
+5-6 sentence description of the lesson — what it covers, what students will learn,
+and why it matters.
+
+Return ONLY the description as plain text, no JSON, no markdown.
+"""
+
+
+def generate_lesson_description(transcript: dict, lesson_title: str) -> str:
+    """Generate a 5-6 sentence description for a lesson from its transcript."""
+    full_text = transcript.get("fullText", "")[:12000]
+    user = f"Lesson title: {lesson_title}\n\nTranscript:\n{full_text}"
+    return _llm_raw(LESSON_DESCRIPTION_SYSTEM, user, max_tokens=512).strip()
+
+
 DESCRIPTION_SYSTEM = """
 You are a curriculum designer. Given a course title and the short descriptions of its
 lessons (skip any that are empty), write a single cohesive paragraph that describes
@@ -392,10 +408,14 @@ def _get_video_url(lesson: dict) -> str:
 def _classify_url(url: str) -> str:
     """
     Classify a lesson URL for duration estimation.
-    Returns: 'transcribable' | 'non_transcribable_video' | 'pdf' | 'miro' | 'other' | 'none'
+    Returns: 'transcribable' | 'non_transcribable_video' | 'zoom_recording' | 'pdf' | 'miro' | 'scheduling' | 'other' | 'none'
     """
     if not url:
         return "none"
+    if re.search(r'calendly\.com|zoom\.us/j/', url, re.IGNORECASE):
+        return "scheduling"
+    if re.search(r'zoom\.us/(rec|clips)/', url, re.IGNORECASE):
+        return "zoom_recording"
     if _PREVIEW_URL_PATTERN.search(url) and not _IGNORED_URL_PATTERNS.search(url):
         return "transcribable"
     if re.search(r'\.pdf(\?|$)', url, re.IGNORECASE):
@@ -415,11 +435,11 @@ def _random_duration(min_minutes: int, max_minutes: int) -> dict:
 def _duration_for_kind(kind: str, transcript: dict = None) -> dict:
     if kind == "transcribable" and transcript:
         return _duration_from_transcript(transcript)
-    if kind == "none":
+    if kind in ("none", "scheduling"):
         return {"hours": 0, "minutes": 0}
     if kind in ("pdf", "miro"):
         return _random_duration(30, 60)
-    if kind == "non_transcribable_video":
+    if kind in ("non_transcribable_video", "zoom_recording"):
         return _random_duration(60, 90)
     return _random_duration(15, 30)  # other
 
@@ -495,7 +515,7 @@ def process_lesson(course_id: str, lesson: dict):
         print("    [3/5] Extracting metadata...")
         set_lesson_state(course_id, lesson_id, {"status": "extracting"})
         extraction = llm_extract(transcript, lesson)
-        prod_db.collection("Lessons").document(lesson_id).update({
+        lesson_update = {
             "shortDescription":  extraction.get("shortDescription", ""),
             "keyConcepts":       extraction.get("keyConcepts", []),
             "learningOutcomes":  extraction.get("learningOutcomes", []),
@@ -504,7 +524,10 @@ def process_lesson(course_id: str, lesson: dict):
             "prerequisites":     extraction.get("prerequisites", []),
             "duration":          _duration_for_kind("transcribable", transcript),
             "updatedAt": SERVER_TIMESTAMP,
-        })
+        }
+        if not lesson.get("description"):
+            lesson_update["description"] = generate_lesson_description(transcript, lesson.get("title", ""))
+        prod_db.collection("Lessons").document(lesson_id).update(lesson_update)
         _mark_step_done(course_id, lesson_id, "extraction")
     else:
         print("    [3/5] Extraction already done, loading...")
@@ -703,7 +726,17 @@ def run_course(course_id: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    ids = sys.argv[1:] or COURSE_IDS
+    import json as _json
+
+    args = sys.argv[1:]
+    if args and args[0] == "--from-json":
+        json_path = args[1] if len(args) > 1 else "courses.json"
+        with open(json_path) as f:
+            ids = [c["firestoreId"] for c in _json.load(f) if c.get("firestoreId")]
+        print(f"Loaded {len(ids)} course IDs from {json_path}")
+    else:
+        ids = args or COURSE_IDS
+
     if not ids:
         print("No course IDs provided. Add them to COURSE_IDS or pass as arguments.")
         sys.exit(1)
