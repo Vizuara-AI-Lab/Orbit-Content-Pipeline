@@ -388,7 +388,13 @@ def _get_lesson_url(lesson: dict) -> str:
     embed = lesson.get("embedUrl") or ""
     if embed:
         return embed
-    return _extract_url_from_description(lesson.get("description") or "")
+    # Scan raw — _extract_url_from_description filters out Zoom/calendar links which
+    # we still need for duration classification.
+    for match in re.finditer(r'https?://\S+', lesson.get("description") or ""):
+        url = match.group().rstrip(".,;)")
+        if url:
+            return url
+    return ""
 
 
 def _get_video_url(lesson: dict) -> str:
@@ -412,7 +418,7 @@ def _classify_url(url: str) -> str:
     """
     if not url:
         return "none"
-    if re.search(r'calendly\.com|zoom\.us/j/', url, re.IGNORECASE):
+    if re.search(r'calendly\.com|zoom\.us/j/|calendar', url, re.IGNORECASE):
         return "scheduling"
     if re.search(r'zoom\.us/(rec|clips)/', url, re.IGNORECASE):
         return "zoom_recording"
