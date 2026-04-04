@@ -236,6 +236,47 @@ def generate_course_description(course_id: str, course_title: str, all_lesson_id
     return _llm_raw(DESCRIPTION_SYSTEM, user, max_tokens=512).strip()
 
 
+SLUG_DISAMBIGUATE_SYSTEM = """
+You are given a course title and a URL slug that is already taken.
+Suggest a new slug by appending 1-3 descriptive words that naturally extend the title.
+Return ONLY the new slug as a single lowercase hyphenated string, nothing else.
+"""
+
+
+def _title_to_slug(title: str) -> str:
+    slug = title.lower().strip()
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+    slug = re.sub(r"[\s]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug
+
+
+def _slug_exists(slug: str) -> bool:
+    docs = prod_db.collection("Courses").where("slug", "==", slug).limit(1).get()
+    return len(docs) > 0
+
+
+def generate_course_slug(course_title: str) -> str:
+    """
+    Derive a unique slug from the course title.
+    If the base slug is taken, ask the LLM to extend it, then verify uniqueness.
+    """
+    slug = _title_to_slug(course_title)
+    if not _slug_exists(slug):
+        return slug
+
+    # Slug is taken — let LLM extend it until unique (max 5 attempts)
+    current = slug
+    for _ in range(5):
+        user = f"Course title: {course_title}\nTaken slug: {current}"
+        current = _title_to_slug(_llm_raw(SLUG_DISAMBIGUATE_SYSTEM, user, max_tokens=32))
+        if current and not _slug_exists(current):
+            return current
+
+    # Fallback: append course_id fragment (should never be needed in practice)
+    return slug
+
+
 def generate_course_tags(course_id: str, course_title: str, topics: dict[str, list[str]]) -> list[str]:
     """Derive up to 3 specific tags for a course from its prod lesson transcripts."""
     all_lesson_ids = [lid for ids in topics.values() for lid in ids]
@@ -554,6 +595,19 @@ def run_course(course_id: str):
             print(f"  [CATEGORIES] ✓ {categories}")
         except Exception as e:
             print(f"  [CATEGORIES] [WARN] Category generation failed: {e}")
+
+    # ── Slug generation (only if missing) ────────────────────────────────────
+    if not course_doc.get("slug"):
+        print(f"\n  [SLUG] slug missing — generating...")
+        try:
+            slug = generate_course_slug(course_title)
+            prod_db.collection("Courses").document(course_id).update({
+                "slug": slug,
+                "updatedAt": SERVER_TIMESTAMP,
+            })
+            print(f"  [SLUG] ✓ {slug}")
+        except Exception as e:
+            print(f"  [SLUG] [WARN] Slug generation failed: {e}")
 
     # ── Mode ──────────────────────────────────────────────────────────────────
     prod_db.collection("Courses").document(course_id).update({
