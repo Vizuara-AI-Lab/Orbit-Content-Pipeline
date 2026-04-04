@@ -35,6 +35,7 @@ from run_pipeline import (
     _extract_url_from_description,
     _IGNORED_URL_PATTERNS,
     _PREVIEW_URL_PATTERN,
+    _llm_raw,
     _llm_json_array,
     QUIZ_SYSTEM,
     MAX_CHARS_PER_LESSON,
@@ -207,6 +208,32 @@ def generate_course_categories(course_id: str, course_title: str, topics: dict[s
         + "\n---\n".join(transcript_excerpts[:10])
     )
     return _llm_json_array(CATEGORY_SYSTEM, user, max_tokens=256)[:5]
+
+
+DESCRIPTION_SYSTEM = """
+You are a curriculum designer. Given a course title and the short descriptions of its
+lessons (skip any that are empty), write a single cohesive paragraph that describes
+the course — what it covers, what students will learn, and who it is for.
+
+Return ONLY the paragraph as plain text, no JSON, no markdown.
+"""
+
+
+def generate_course_description(course_id: str, course_title: str, all_lesson_ids: list[str]) -> str:
+    """Build a course description from lesson shortDescriptions, falling back to description."""
+    parts = []
+    for lid in all_lesson_ids:
+        d = prod_db.collection("Lessons").document(lid).get().to_dict() or {}
+        text = (d.get("shortDescription") or d.get("description") or "").strip()
+        title = (d.get("title") or lid).strip()
+        if text:
+            parts.append(f"- {title}: {text}")
+
+    if not parts:
+        return ""
+
+    user = f"Course title: {course_title}\n\nLesson descriptions:\n" + "\n".join(parts)
+    return _llm_raw(DESCRIPTION_SYSTEM, user, max_tokens=512).strip()
 
 
 def generate_course_tags(course_id: str, course_title: str, topics: dict[str, list[str]]) -> list[str]:
@@ -487,6 +514,33 @@ def run_course(course_id: str):
         except Exception:
             print(f"  [ERROR] Quiz for topic {topic_id} failed:")
             traceback.print_exc()
+
+    # ── Duration aggregation ──────────────────────────────────────────────────
+    all_lesson_ids = [l["id"] for l in all_lessons]
+    total_minutes = 0
+    for lid in all_lesson_ids:
+        dur = (prod_db.collection("Lessons").document(lid).get().to_dict() or {}).get("duration") or {}
+        total_minutes += (dur.get("hours") or 0) * 60 + (dur.get("minutes") or 0)
+    prod_db.collection("Courses").document(course_id).update({
+        "duration": {"hours": total_minutes // 60, "minutes": total_minutes % 60},
+        "updatedAt": SERVER_TIMESTAMP,
+    })
+    print(f"  [DURATION] ✓ {total_minutes // 60}h {total_minutes % 60}m")
+
+    # ── Description generation ────────────────────────────────────────────────
+    print(f"\n  [DESCRIPTION] Generating course description from lesson shortDescriptions...")
+    try:
+        description = generate_course_description(course_id, course_title, all_lesson_ids)
+        if description:
+            prod_db.collection("Courses").document(course_id).update({
+                "description": description,
+                "updatedAt": SERVER_TIMESTAMP,
+            })
+            print(f"  [DESCRIPTION] ✓ Written")
+        else:
+            print(f"  [DESCRIPTION] [WARN] No lesson shortDescriptions available, skipping.")
+    except Exception as e:
+        print(f"  [DESCRIPTION] [WARN] Description generation failed: {e}")
 
     # ── Category population (only if missing) ────────────────────────────────
     if not course_doc.get("categoryIds"):
