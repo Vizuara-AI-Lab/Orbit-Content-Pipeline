@@ -16,6 +16,7 @@ Usage:
     If no course IDs are passed, runs all IDs in COURSE_IDS below.
 """
 
+import os
 import re
 import sys
 import uuid
@@ -39,12 +40,77 @@ from run_pipeline import (
     _llm_json_array,
     QUIZ_SYSTEM,
     MAX_CHARS_PER_LESSON,
+    FIGURE_STYLE_CONTEXT,
     transcribe,
     audit_transcript,
     llm_extract,
     generate_summary,
     generate_figures,
 )
+
+# ── Google API key rotation ───────────────────────────────────────────────────
+# Supports a comma-separated GOOGLE_API_KEY and/or GOOGLE_API_KEY_2 ... _9.
+_raw_key = os.getenv("GOOGLE_API_KEY", "")
+_GOOGLE_API_KEYS: list[str] = [k.strip() for k in _raw_key.split(",") if k.strip()]
+for _i in range(2, 10):
+    _extra = os.getenv(f"GOOGLE_API_KEY_{_i}", "")
+    if _extra.strip():
+        _GOOGLE_API_KEYS.append(_extra.strip())
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("quota", "resource_exhausted", "429", "rate limit", "ratelimit"))
+
+
+def _paperbanana_and_upload_with_fallback(description: str, course_id: str, lesson_id: str, index: int) -> str:
+    """
+    Identical to run_pipeline._paperbanana_and_upload but rotates through
+    _GOOGLE_API_KEYS when a quota / rate-limit error is encountered.
+    """
+    import asyncio
+    from paperbanana import DiagramType, GenerationInput, PaperBananaPipeline
+    from paperbanana.core.config import Settings
+
+    if not _GOOGLE_API_KEYS:
+        raise RuntimeError("No GOOGLE_API_KEY configured")
+
+    last_exc: Exception | None = None
+    for key in _GOOGLE_API_KEYS:
+        os.environ["GOOGLE_API_KEY"] = key
+        try:
+            settings = Settings(
+                vlm_provider="gemini",
+                vlm_model="gemini-2.0-flash",
+                image_provider="google_imagen",
+                image_model="gemini-3-pro-image-preview",
+                refinement_iterations=3,
+            )
+            pipeline = PaperBananaPipeline(settings=settings)
+            result = asyncio.run(pipeline.generate(
+                GenerationInput(
+                    source_context=FIGURE_STYLE_CONTEXT + "\n\nDiagram to generate:\n" + description,
+                    communicative_intent=description,
+                    diagram_type=DiagramType.METHODOLOGY,
+                )
+            ))
+            storage_path = f"lesson_figures/{course_id}/{lesson_id}/figure_{index:03d}.png"
+            blob = run_pipeline.orbit_bucket.blob(storage_path)
+            blob.upload_from_filename(result.image_path, content_type="image/png")
+            blob.make_public()
+            return blob.public_url
+        except Exception as exc:
+            if _is_quota_error(exc):
+                print(f"  [WARN] Google API key quota exceeded, trying next key...")
+                last_exc = exc
+                continue
+            raise
+
+    raise RuntimeError(f"All Google API keys exhausted") from last_exc
+
+
+# Patch into run_pipeline so generate_figures() picks up the fallback version.
+run_pipeline._paperbanana_and_upload = _paperbanana_and_upload_with_fallback
 
 
 def _duration_from_transcript(transcript: dict) -> dict:
