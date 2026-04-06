@@ -21,11 +21,17 @@ import json
 import re
 import sys
 
+import run_pipeline
 from run_pipeline import (
-    orbit_db,
+    prod_db,
+    prod_bucket,
     _enrich_figure_description,
     _paperbanana_and_upload,
 )
+
+# run_content_pipeline.py redirects figure uploads to prod storage.
+# Mirror that here so repaired figures land in the same bucket.
+run_pipeline.orbit_bucket = prod_bucket
 
 # Matches [FIGURE: "desc"] or [FIGURE: desc] — with or without quotes
 _ANY_FIGURE_RE = re.compile(r'\[FIGURE:\s*"?([^"\]\n]+?)"?\s*\]')
@@ -178,7 +184,7 @@ def repair_document(doc_id: str, data: dict) -> bool:
     still_unresolved = len(_ANY_FIGURE_RE.findall(new_content))
     new_figure_count = data.get("figureCount", 0) + len(desc_to_url)
 
-    orbit_db.collection("LessonSummaries").document(doc_id).update({
+    prod_db.collection("LessonSummaries").document(doc_id).update({
         "content":     new_content,
         "contentRaw":  new_content_raw,
         "figureCount": new_figure_count,
@@ -215,7 +221,7 @@ def _load_course_ids_from_json(path: str) -> list[str]:
 def _items_for_courses(course_ids: list[str]) -> list[tuple[str, dict]]:
     items = []
     for course_id in course_ids:
-        docs = orbit_db.collection("LessonSummaries").where("courseId", "==", course_id).stream()
+        docs = prod_db.collection("LessonSummaries").where("courseId", "==", course_id).stream()
         items += [(d.id, d.to_dict()) for d in docs if _needs_repair(d.to_dict())]
     return items
 
@@ -238,7 +244,7 @@ def main():
     else:
         # Positional args treated as explicit LessonSummaries doc IDs
         doc_ids  = args
-        raw_docs = [orbit_db.collection("LessonSummaries").document(d).get() for d in doc_ids]
+        raw_docs = [prod_db.collection("LessonSummaries").document(d).get() for d in doc_ids]
         items    = [(d.id, d.to_dict()) for d in raw_docs if d.exists]
         missing  = [doc_ids[i] for i, d in enumerate(raw_docs) if not d.exists]
         if missing:
