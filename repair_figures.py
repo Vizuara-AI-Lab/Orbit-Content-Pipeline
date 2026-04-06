@@ -26,8 +26,8 @@ from run_pipeline import (
     prod_db,
     prod_bucket,
     _enrich_figure_description,
-    _paperbanana_and_upload,
 )
+from run_content_pipeline import _paperbanana_and_upload_with_fallback as _paperbanana_and_upload
 
 # run_content_pipeline.py redirects figure uploads to prod storage.
 # Mirror that here so repaired figures land in the same bucket.
