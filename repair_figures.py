@@ -11,11 +11,13 @@ Also handles the older <!-- figure failed: ... --> comment style for
 documents processed before this fix.
 
 Usage:
-    python repair_figures.py                        # scan all LessonSummaries
-    python repair_figures.py --course COURSE_ID     # all lessons in a course
-    python repair_figures.py courseA_lessonB ...    # specific doc IDs
+    python repair_figures.py                            # courses.json (default)
+    python repair_figures.py --from-json courses.json  # explicit JSON path
+    python repair_figures.py --course COURSE_ID ...    # specific course IDs
+    python repair_figures.py courseA_lessonB ...       # specific doc IDs
 """
 
+import json
 import re
 import sys
 
@@ -202,33 +204,45 @@ def _needs_repair(data: dict) -> bool:
     return "[FIGURE:" in content or "<!-- figure failed:" in content
 
 
+def _load_course_ids_from_json(path: str) -> list[str]:
+    with open(path) as f:
+        entries = json.load(f)
+    ids = [c["firestoreId"] for c in entries if c.get("firestoreId")]
+    print(f"Loaded {len(ids)} course ID(s) from {path}")
+    return ids
+
+
+def _items_for_courses(course_ids: list[str]) -> list[tuple[str, dict]]:
+    items = []
+    for course_id in course_ids:
+        docs = orbit_db.collection("LessonSummaries").where("courseId", "==", course_id).stream()
+        items += [(d.id, d.to_dict()) for d in docs if _needs_repair(d.to_dict())]
+    return items
+
+
 def main():
     args = sys.argv[1:]
 
-    if args and args[0] == "--course":
+    if not args or args[0] == "--from-json":
+        json_path = args[1] if len(args) > 1 else "courses.json"
+        course_ids = _load_course_ids_from_json(json_path)
+        print(f"Querying LessonSummaries for {len(course_ids)} course(s)...\n")
+        items = _items_for_courses(course_ids)
+    elif args[0] == "--course":
         if len(args) < 2:
             print("Usage: repair_figures.py --course COURSE_ID [COURSE_ID ...]")
             sys.exit(1)
         course_ids = args[1:]
         print(f"Querying LessonSummaries for course(s): {course_ids}\n")
-        items = []
-        for course_id in course_ids:
-            docs = orbit_db.collection("LessonSummaries").where("courseId", "==", course_id).stream()
-            items += [(d.id, d.to_dict()) for d in docs if _needs_repair(d.to_dict())]
-    elif args:
+        items = _items_for_courses(course_ids)
+    else:
+        # Positional args treated as explicit LessonSummaries doc IDs
         doc_ids  = args
         raw_docs = [orbit_db.collection("LessonSummaries").document(d).get() for d in doc_ids]
         items    = [(d.id, d.to_dict()) for d in raw_docs if d.exists]
         missing  = [doc_ids[i] for i, d in enumerate(raw_docs) if not d.exists]
         if missing:
             print(f"[WARN] Not found in LessonSummaries: {missing}")
-    else:
-        print("Scanning all LessonSummaries for unresolved [FIGURE:] blocks...\n")
-        items = [
-            (d.id, d.to_dict())
-            for d in orbit_db.collection("LessonSummaries").stream()
-            if _needs_repair(d.to_dict())
-        ]
 
     if not items:
         print("No documents with unresolved figures found.")
