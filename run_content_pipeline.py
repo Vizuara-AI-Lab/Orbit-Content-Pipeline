@@ -81,19 +81,24 @@ def _paperbanana_and_upload_with_fallback(description: str, course_id: str, less
         try:
             settings = Settings(
                 vlm_provider="gemini",
-                vlm_model="gemini-2.0-flash",
+                vlm_model="gemini-2.5-flash",
                 image_provider="google_imagen",
                 image_model="gemini-3-pro-image-preview",
                 refinement_iterations=3,
             )
             pipeline = PaperBananaPipeline(settings=settings)
-            result = asyncio.run(pipeline.generate(
-                GenerationInput(
-                    source_context=FIGURE_STYLE_CONTEXT + "\n\nDiagram to generate:\n" + description,
-                    communicative_intent=description,
-                    diagram_type=DiagramType.METHODOLOGY,
+            async def _run():
+                return await asyncio.wait_for(
+                    pipeline.generate(
+                        GenerationInput(
+                            source_context=FIGURE_STYLE_CONTEXT + "\n\nDiagram to generate:\n" + description,
+                            communicative_intent=description,
+                            diagram_type=DiagramType.METHODOLOGY,
+                        )
+                    ),
+                    timeout=360,
                 )
-            ))
+            result = asyncio.run(_run())
             storage_path = f"lesson_figures/{course_id}/{lesson_id}/figure_{index:03d}.png"
             blob = run_pipeline.orbit_bucket.blob(storage_path)
             blob.upload_from_filename(result.image_path, content_type="image/png")

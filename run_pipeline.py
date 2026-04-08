@@ -714,7 +714,7 @@ def _paperbanana_and_upload(description: str, course_id: str, lesson_id: str, in
 
     settings = Settings(
         vlm_provider="gemini",
-        vlm_model="gemini-2.0-flash",
+        vlm_model="gemini-2.5-flash",
         image_provider="google_imagen",
         image_model="gemini-3-pro-image-preview",
         refinement_iterations=3,
