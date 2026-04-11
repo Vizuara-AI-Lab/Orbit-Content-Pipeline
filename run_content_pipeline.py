@@ -165,19 +165,19 @@ COURSE_IDS = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_course_state(course_id: str) -> dict:
-    doc = orbit_db.collection("_PipelineStateProd").document(course_id).get()
+    doc = prod_db.collection("_PipelineStateProd").document(course_id).get()
     return doc.to_dict() or {} if doc.exists else {}
 
 
 def set_course_state(course_id: str, data: dict):
-    orbit_db.collection("_PipelineStateProd").document(course_id).set(
+    prod_db.collection("_PipelineStateProd").document(course_id).set(
         {**data, "updatedAt": SERVER_TIMESTAMP}, merge=True
     )
 
 
 def get_lesson_state(course_id: str, lesson_id: str) -> dict:
     doc = (
-        orbit_db.collection("_PipelineStateProd")
+        prod_db.collection("_PipelineStateProd")
         .document(course_id)
         .collection("Lessons")
         .document(lesson_id)
@@ -188,7 +188,7 @@ def get_lesson_state(course_id: str, lesson_id: str) -> dict:
 
 def set_lesson_state(course_id: str, lesson_id: str, data: dict):
     (
-        orbit_db.collection("_PipelineStateProd")
+        prod_db.collection("_PipelineStateProd")
         .document(course_id)
         .collection("Lessons")
         .document(lesson_id)
