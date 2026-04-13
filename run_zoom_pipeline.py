@@ -465,9 +465,21 @@ def run_zoom_course(course_id: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    ids = sys.argv[1:] or COURSE_IDS
+    import json as _json
+
+    args = sys.argv[1:]
+    if args and args[0] == "--from-json":
+        json_path = args[1] if len(args) > 1 else "courses.json"
+        with open(json_path) as f:
+            ids = [c["firestoreId"] for c in _json.load(f) if c.get("firestoreId")]
+        print(f"Loaded {len(ids)} course ID(s) from {json_path}")
+    else:
+        ids = args or COURSE_IDS
+
     if not ids:
-        print("Usage: python run_zoom_pipeline.py <course_id> [<course_id> ...]")
+        print("Usage: python run_zoom_pipeline.py <course_id> [...]")
+        print("       python run_zoom_pipeline.py --from-json [courses.json]")
         sys.exit(1)
+
     for cid in ids:
         run_zoom_course(cid)
