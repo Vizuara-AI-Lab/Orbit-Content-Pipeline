@@ -324,6 +324,7 @@ def process_zoom_lesson(course_id: str, lesson: dict):
                 )
                 prod_db.collection("Lessons").document(lesson_id).update({
                     "embedUrl": youtube_url,
+                    "type": "VIDEO LECTURE",
                     "updatedAt": SERVER_TIMESTAMP,
                 })
                 print(f"      → {youtube_url}")
