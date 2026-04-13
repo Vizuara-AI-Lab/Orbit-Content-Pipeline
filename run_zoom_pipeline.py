@@ -140,7 +140,7 @@ def _youtube_service():
     return build("youtube", "v3", credentials=creds)
 
 
-def _upload_to_youtube(mp4_path: str, title: str, description: str) -> str:
+def _upload_to_youtube(mp4_path: str, title: str) -> str:
     """Upload mp4_path to YouTube as an unlisted video. Returns the short YouTube URL."""
     from googleapiclient.http import MediaFileUpload
 
@@ -148,7 +148,6 @@ def _upload_to_youtube(mp4_path: str, title: str, description: str) -> str:
     body = {
         "snippet": {
             "title": title,
-            "description": description,
             "categoryId": "27",  # Education
         },
         "status": {"privacyStatus": "unlisted"},
@@ -321,7 +320,6 @@ def process_zoom_lesson(course_id: str, lesson: dict):
                 youtube_url = _upload_to_youtube(
                     mp4_path=str(mp4_path),
                     title=lesson.get("title", lesson_id),
-                    description=lesson.get("description", ""),
                 )
                 prod_db.collection("Lessons").document(lesson_id).update({
                     "embedUrl": youtube_url,
