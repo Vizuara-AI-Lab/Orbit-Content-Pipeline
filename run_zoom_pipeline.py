@@ -26,6 +26,7 @@ Usage:
 import os
 import re
 import sys
+import subprocess
 import tempfile
 import traceback
 from pathlib import Path
@@ -333,7 +334,14 @@ def process_zoom_lesson(course_id: str, lesson: dict):
             if "transcription" not in done:
                 print("    [1/5] Transcribing...")
                 set_lesson_state(course_id, lesson_id, {"status": "transcribing"})
-                transcript = _transcribe_audio(str(mp4_path))
+                # Extract audio-only (16kHz mono 32kbps) before transcribing.
+                # Keeps chunks well under Whisper's 25MB limit.
+                audio_path = str(Path(tmpdir) / "audio.mp3")
+                subprocess.run(
+                    ["ffmpeg", "-i", str(mp4_path), "-vn", "-ar", "16000", "-ac", "1", "-b:a", "32k", audio_path],
+                    check=True, capture_output=True,
+                )
+                transcript = _transcribe_audio(audio_path)
                 write_transcript(course_id, lesson_id, transcript)
                 _mark_step_done(course_id, lesson_id, "transcription")
             else:
