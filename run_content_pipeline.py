@@ -21,7 +21,11 @@ import re
 import sys
 import uuid
 import random
+import tempfile
 import traceback
+from pathlib import Path
+
+import download_zoom
 
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
@@ -42,6 +46,7 @@ from run_pipeline import (
     MAX_CHARS_PER_LESSON,
     FIGURE_STYLE_CONTEXT,
     transcribe,
+    _transcribe_audio,
     audit_transcript,
     llm_extract,
     generate_summary,
@@ -438,6 +443,81 @@ def _classify_url(url: str) -> str:
     return "other"
 
 
+_YT_SCOPES       = ["https://www.googleapis.com/auth/youtube.upload"]
+_YT_TOKEN_FILE   = Path(__file__).parent / "youtube-token.json"
+_YT_SECRETS_FILE = Path(__file__).parent / "youtube-client-secrets.json"
+
+
+def _youtube_service():
+    """Return an authenticated YouTube API service, refreshing/creating the token as needed."""
+    from googleapiclient.discovery import build
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+
+    creds = None
+    if _YT_TOKEN_FILE.exists():
+        creds = Credentials.from_authorized_user_file(str(_YT_TOKEN_FILE), _YT_SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(_YT_SECRETS_FILE), _YT_SCOPES)
+            creds = flow.run_local_server(port=0)
+        _YT_TOKEN_FILE.write_text(creds.to_json())
+    return build("youtube", "v3", credentials=creds)
+
+
+def _upload_to_youtube(mp4_path: str, title: str, description: str) -> str:
+    """
+    Upload mp4_path to YouTube as an unlisted video.
+    Returns the short YouTube URL (https://youtu.be/<id>).
+    """
+    from googleapiclient.http import MediaFileUpload
+
+    youtube = _youtube_service()
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "categoryId": "27",  # Education
+        },
+        "status": {"privacyStatus": "unlisted"},
+    }
+    media = MediaFileUpload(mp4_path, mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024)
+    insert_request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+    response = None
+    while response is None:
+        status, response = insert_request.next_chunk()
+        if status:
+            print(f"      Upload: {int(status.progress() * 100)}%")
+
+    return f"https://youtu.be/{response['id']}"
+
+
+def _extract_zoom_info(description: str) -> tuple[str, str] | None:
+    """
+    Parse a Zoom share URL and passcode from a lesson description.
+    Expected format (anywhere in the text):
+        https://us06web.zoom.us/rec/share/...
+        Passcode: wd71jm?=
+    Returns (url, passcode) or None if not found.
+    """
+    zoom_url = None
+    for m in re.finditer(r'https?://\S+', description or ""):
+        candidate = m.group().rstrip(".,;)")
+        if re.search(r'zoom\.us/rec/', candidate, re.IGNORECASE):
+            zoom_url = candidate
+            break
+    if not zoom_url:
+        return None
+    pass_match = re.search(r'Passcode:\s*(\S+)', description, re.IGNORECASE)
+    if not pass_match:
+        return None
+    return zoom_url, pass_match.group(1)
+
+
 def _random_duration(min_minutes: int, max_minutes: int) -> dict:
     total = random.randint(min_minutes, max_minutes)
     return {"hours": total // 60, "minutes": total % 60}
@@ -573,6 +653,132 @@ def process_lesson(course_id: str, lesson: dict):
     print("    ✓ Lesson complete")
 
 
+def process_zoom_lesson(course_id: str, lesson: dict):
+    """
+    Full pipeline for a Zoom-recorded lesson.
+    Downloads the recording via Playwright, transcribes the local MP4,
+    then runs audit → extraction → summary → figures identically to process_lesson.
+    """
+    lesson_id = lesson["id"]
+    state = get_lesson_state(course_id, lesson_id)
+    done = set(state.get("stepsCompleted", []))
+
+    # ── Step 1: Download → YouTube upload → Transcription ────────────────────
+    # Download is needed if either upload or transcription hasn't been done yet.
+    transcript = None
+    if "youtube_upload" not in done or "transcription" not in done:
+        zoom_info = _extract_zoom_info(lesson.get("description", ""))
+        if not zoom_info:
+            raise ValueError(f"Lesson {lesson_id}: no Zoom URL/passcode found in description")
+        zoom_url, zoom_password = zoom_info
+        print("    [1/5] Downloading Zoom recording...")
+        set_lesson_state(course_id, lesson_id, {"status": "downloading"})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mp4_path = download_zoom.download(
+                share_url=zoom_url,
+                password=zoom_password,
+                output_dir=Path(tmpdir),
+                headless=True,
+            )
+
+            if "youtube_upload" not in done:
+                print("    [1/5] Uploading to YouTube (unlisted)...")
+                set_lesson_state(course_id, lesson_id, {"status": "uploading"})
+                youtube_url = _upload_to_youtube(
+                    mp4_path=str(mp4_path),
+                    title=lesson.get("title", lesson_id),
+                    description=lesson.get("description", ""),
+                )
+                prod_db.collection("Lessons").document(lesson_id).update({
+                    "embedUrl": youtube_url,
+                    "updatedAt": SERVER_TIMESTAMP,
+                })
+                print(f"      → {youtube_url}")
+                _mark_step_done(course_id, lesson_id, "youtube_upload")
+            else:
+                print("    [1/5] YouTube upload already done, skipping.")
+
+            if "transcription" not in done:
+                print("    [1/5] Transcribing...")
+                set_lesson_state(course_id, lesson_id, {"status": "transcribing"})
+                transcript = _transcribe_audio(str(mp4_path))
+                write_transcript(course_id, lesson_id, transcript)
+                _mark_step_done(course_id, lesson_id, "transcription")
+            else:
+                print("    [1/5] Transcription already done, skipping.")
+
+    # Load from Firestore if transcription was already done in a previous run
+    if transcript is None:
+        print("    [1/5] Transcription already done, loading...")
+        transcript = prod_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").get().to_dict()
+
+    # Steps 2–5 are identical to process_lesson ──────────────────────────────
+
+    if "audit" not in done:
+        print("    [2/5] Auditing transcript...")
+        set_lesson_state(course_id, lesson_id, {"status": "auditing"})
+        raw_text = transcript["fullText"]
+        transcript = audit_transcript(transcript, lesson.get("title", ""))
+        prod_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").update({
+            "rawFullText": raw_text,
+            "fullText":    transcript["fullText"],
+            "audited":     True,
+        })
+        _mark_step_done(course_id, lesson_id, "audit")
+    else:
+        print("    [2/5] Audit already done.")
+
+    if "extraction" not in done:
+        print("    [3/5] Extracting metadata...")
+        set_lesson_state(course_id, lesson_id, {"status": "extracting"})
+        extraction = llm_extract(transcript, lesson)
+        lesson_update = {
+            "shortDescription":  extraction.get("shortDescription", ""),
+            "keyConcepts":       extraction.get("keyConcepts", []),
+            "learningOutcomes":  extraction.get("learningOutcomes", []),
+            "chapterMarkers":    extraction.get("chapterMarkers", []),
+            "difficulty":        extraction.get("difficulty", ""),
+            "prerequisites":     extraction.get("prerequisites", []),
+            "duration":          _duration_for_kind("transcribable", transcript),
+            "updatedAt": SERVER_TIMESTAMP,
+        }
+        # Generate a prose description if the existing one is just a Zoom share link (no real text)
+        existing_desc = lesson.get("description", "")
+        if not existing_desc or re.fullmatch(r'[\s\S]*zoom\.us/rec/[\s\S]*', existing_desc, re.IGNORECASE):
+            lesson_update["description"] = generate_lesson_description(transcript, lesson.get("title", ""))
+        prod_db.collection("Lessons").document(lesson_id).update(lesson_update)
+        _mark_step_done(course_id, lesson_id, "extraction")
+    else:
+        print("    [3/5] Extraction already done, loading...")
+        extraction = prod_db.collection("Lessons").document(lesson_id).get().to_dict()
+
+    if "summary" not in done:
+        print("    [4/5] Generating summary...")
+        set_lesson_state(course_id, lesson_id, {"status": "summarizing"})
+        summary = generate_summary(transcript, extraction, lesson.get("title", ""))
+        _mark_step_done(course_id, lesson_id, "summary")
+    else:
+        print("    [4/5] Summary already done, loading...")
+        saved = prod_db.collection("LessonSummaries").document(f"{course_id}_{lesson_id}").get().to_dict() or {}
+        summary = {
+            "contentLatex":    saved.get("contentRaw", ""),
+            "contentMarkdown": saved.get("contentMarkdownRaw", ""),
+            "figureCount":     saved.get("figureCount", 0),
+        }
+
+    if "figures" not in done:
+        print(f"    [5/5] Generating {summary['figureCount']} figures...")
+        set_lesson_state(course_id, lesson_id, {"status": "figures"})
+        final_summary = generate_figures(course_id, lesson_id, summary)
+        write_summary(course_id, lesson_id, final_summary)
+        _mark_step_done(course_id, lesson_id, "figures")
+    else:
+        print("    [5/5] Figures already done.")
+
+    set_lesson_state(course_id, lesson_id, {"status": "done"})
+    print("    ✓ Lesson complete")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # COURSE ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -602,21 +808,39 @@ def run_course(course_id: str):
         return
 
     transcribable = [l for l in all_lessons if _get_video_url(l)]
-    others        = [l for l in all_lessons if not _get_video_url(l)]
+    zoom_lessons  = [l for l in all_lessons if not _get_video_url(l) and _extract_zoom_info(l.get("description", ""))]
+    others        = [l for l in all_lessons if not _get_video_url(l) and not _extract_zoom_info(l.get("description", ""))]
 
-    print(f"  Found {len(all_lessons)} lesson(s): {len(transcribable)} transcribable, {len(others)} duration-only")
+    print(
+        f"  Found {len(all_lessons)} lesson(s): "
+        f"{len(transcribable)} YouTube/Vimeo, "
+        f"{len(zoom_lessons)} Zoom, "
+        f"{len(others)} duration-only"
+    )
 
-    # Group transcribable lesson IDs by topic for quiz generation
+    # Group transcribable + zoom lesson IDs by topic for quiz generation
     topics: dict[str, list[str]] = {}
-    for lesson in transcribable:
+    for lesson in transcribable + zoom_lessons:
         tid = lesson["topicId"]
         topics.setdefault(tid, []).append(lesson["id"])
 
-    # Full pipeline for transcribable lessons
+    # Full pipeline for YouTube/Vimeo lessons
     for lesson in transcribable:
-        print(f"\n  → Lesson: {lesson.get('title', lesson['id'])}")
+        print(f"\n  → Lesson (YouTube/Vimeo): {lesson.get('title', lesson['id'])}")
         try:
             process_lesson(course_id, lesson)
+        except Exception:
+            print(f"  [ERROR] Lesson {lesson['id']} failed:")
+            traceback.print_exc()
+            set_lesson_state(course_id, lesson["id"], {"status": "failed"})
+            set_course_state(course_id, {"status": "failed", "failedAt": lesson["id"]})
+            return
+
+    # Full pipeline for Zoom lessons
+    for lesson in zoom_lessons:
+        print(f"\n  → Lesson (Zoom): {lesson.get('title', lesson['id'])}")
+        try:
+            process_zoom_lesson(course_id, lesson)
         except Exception:
             print(f"  [ERROR] Lesson {lesson['id']} failed:")
             traceback.print_exc()
