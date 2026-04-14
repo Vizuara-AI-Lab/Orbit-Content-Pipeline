@@ -40,16 +40,14 @@ def download(share_url: str, password: str, output_dir: Path, headless: bool) ->
             passcode_input.fill(password)
             page.click("button#passcode_btn, button[type=submit]")
             try:
-                page.wait_for_selector("video", timeout=15_000)
+                page.wait_for_selector("video", timeout=60_000)
             except PlaywrightTimeoutError:
-                print("ERROR: Timed out waiting for video player after passcode submission.")
-                print("       Check that the password is correct or try --no-headless to debug.")
                 browser.close()
-                sys.exit(1)
+                raise RuntimeError("Timed out waiting for video player after passcode submission — check the password or recording availability.")
         else:
             print("[2/4] No passcode form detected — skipping password step.")
             try:
-                page.wait_for_selector("video", timeout=15_000)
+                page.wait_for_selector("video", timeout=60_000)
             except PlaywrightTimeoutError:
                 browser.close()
                 raise RuntimeError("No passcode form detected and video player did not appear — recording may be expired or unavailable.")
