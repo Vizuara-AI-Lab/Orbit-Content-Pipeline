@@ -51,9 +51,8 @@ def download(share_url: str, password: str, output_dir: Path, headless: bool) ->
             try:
                 page.wait_for_selector("video", timeout=15_000)
             except PlaywrightTimeoutError:
-                print("ERROR: Timed out waiting for video player.")
                 browser.close()
-                sys.exit(1)
+                raise RuntimeError("No passcode form detected and video player did not appear — recording may be expired or unavailable.")
 
         print("[3/4] Extracting video source URL and cookies...")
         video_src = page.eval_on_selector("video", "el => el.src")

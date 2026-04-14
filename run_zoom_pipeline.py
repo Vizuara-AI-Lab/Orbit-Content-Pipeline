@@ -303,7 +303,8 @@ def process_zoom_lesson(course_id: str, lesson: dict):
     if "youtube_upload" not in done or "transcription" not in done:
         zoom_info = _extract_zoom_info(lesson.get("description", ""))
         if not zoom_info:
-            raise ValueError(f"Lesson {lesson_id}: no Zoom URL/passcode found in description")
+            print(f"    [SKIP] No Zoom URL/passcode found in description — skipping.")
+            return
         zoom_url, zoom_password = zoom_info
         print("    [1/5] Downloading Zoom recording...")
         set_lesson_state(course_id, lesson_id, {"status": "downloading"})
