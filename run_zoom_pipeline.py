@@ -186,7 +186,10 @@ def _extract_zoom_info(description: str) -> tuple[str, str] | None:
     pass_match = re.search(r'Passcode:\s*(\S+)', description, re.IGNORECASE)
     if not pass_match:
         return None
-    return zoom_url, pass_match.group(1)
+    # Descriptions are Markdown, so passcodes may contain backslash-escaped
+    # punctuation (e.g. "drg5\*n4L" for literal "drg5*n4L"). Unescape before use.
+    passcode = re.sub(r'\\(.)', r'\1', pass_match.group(1))
+    return zoom_url, passcode
 
 
 # ── Pipeline state ────────────────────────────────────────────────────────────
