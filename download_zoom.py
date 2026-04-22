@@ -31,7 +31,17 @@ def download(share_url: str, password: str, output_dir: Path, headless: bool) ->
         page = context.new_page()
 
         print(f"[1/4] Navigating to share URL...")
-        page.goto(share_url, wait_until="networkidle")
+        page.goto(share_url, wait_until="domcontentloaded")
+
+        # Zoom often redirects/re-renders after initial load; wait until either
+        # the passcode form or the video player settles in the DOM before
+        # probing. wait_for_selector retries across navigations, avoiding the
+        # "Execution context was destroyed" race that query_selector hits.
+        try:
+            page.wait_for_selector("input#passcode, video", timeout=60_000)
+        except PlaywrightTimeoutError:
+            browser.close()
+            raise RuntimeError("Timed out waiting for passcode form or video player — recording may be expired or unavailable.")
 
         # Handle passcode form if present
         passcode_input = page.query_selector("input#passcode")
