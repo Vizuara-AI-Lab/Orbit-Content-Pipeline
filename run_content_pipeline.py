@@ -16,6 +16,7 @@ Usage:
     If no course IDs are passed, runs all IDs in COURSE_IDS below.
 """
 
+import html
 import os
 import re
 import sys
@@ -516,9 +517,10 @@ def _extract_zoom_info(description: str) -> tuple[str, str] | None:
     pass_match = re.search(r'Passcode:\s*(\S+)', description, re.IGNORECASE)
     if not pass_match:
         return None
-    # Descriptions are Markdown, so passcodes may contain backslash-escaped
-    # punctuation (e.g. "drg5\*n4L" for literal "drg5*n4L"). Unescape before use.
-    passcode = re.sub(r'\\(.)', r'\1', pass_match.group(1))
+    # Descriptions are Markdown with HTML-encoded entities, so passcodes may
+    # contain backslash-escaped punctuation (e.g. "drg5\*n4L" → "drg5*n4L")
+    # and HTML entities (e.g. "U&amp;FE0PAn" → "U&FE0PAn"). Unescape both.
+    passcode = html.unescape(re.sub(r'\\(.)', r'\1', pass_match.group(1)))
     return zoom_url, passcode
 
 
