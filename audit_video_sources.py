@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
 Audit lessons across the courses listed in courses.json. For each course,
-count lessons that contain:
-  - a Vimeo URL (in embedUrl or description)
-  - a Zoom recording URL WITH passcode (in embedUrl or description)
+count lessons that the content pipeline would actually route to:
+  - vimeo:N — lessons whose resolved video URL (_get_video_url) is a Vimeo link
+  - zoom:N  — lessons with no video URL at all but with a Zoom recording
+              URL + passcode in the description
+
+These are exactly the filters run_content_pipeline.py applies when splitting
+lessons into its `transcribable` and `zoom_lessons` buckets — so the counts
+reflect what the content pipeline would pick up, not raw URL mentions.
 
 Prints one line per course that has at least one hit:
     course_id | Course Title | zoom:N vimeo:M
@@ -13,30 +18,41 @@ Usage:
 """
 
 import json
-import re
 import sys
 
 from run_pipeline import prod_db
-from run_content_pipeline import _extract_zoom_info
+from run_content_pipeline import _get_video_url, _extract_zoom_info
 
 
-_VIMEO_RE = re.compile(r'vimeo\.com/', re.IGNORECASE)
+def _already_uploaded(course_id: str, lesson_id: str) -> bool:
+    """
+    True if the Zoom/Vimeo pipeline has already uploaded this lesson to YouTube.
+    The "youtube_upload" step marker is written by both pipelines after a
+    successful upload — used here to skip lessons whose description still
+    carries the original Zoom URL + passcode even though processing is done.
+    """
+    doc = (
+        prod_db.collection("_PipelineStateProd")
+        .document(course_id)
+        .collection("Lessons")
+        .document(lesson_id)
+        .get()
+    )
+    if not doc.exists:
+        return False
+    return "youtube_upload" in (doc.to_dict() or {}).get("stepsCompleted", [])
 
 
-def _has_vimeo(lesson: dict) -> bool:
-    for field in ("embedUrl", "description"):
-        if _VIMEO_RE.search(lesson.get(field) or ""):
-            return True
-    return False
-
-
-def _has_zoom_with_passcode(lesson: dict) -> bool:
-    # _extract_zoom_info requires both a zoom.us/rec/ URL and a "Passcode: …"
-    # line; it returns None otherwise. Check both fields.
-    for field in ("embedUrl", "description"):
-        if _extract_zoom_info(lesson.get(field) or ""):
-            return True
-    return False
+def _classify(lesson: dict) -> str | None:
+    """Return 'vimeo', 'zoom', or None — mirroring the content pipeline's routing."""
+    video_url = _get_video_url(lesson)
+    if video_url:
+        if "vimeo.com" in video_url.lower():
+            return "vimeo"
+        return None  # YouTube (or other transcribable) — not counted
+    if _extract_zoom_info(lesson.get("description", "")):
+        return "zoom"
+    return None
 
 
 def audit_course(course_id: str) -> tuple[str, int, int]:
@@ -60,10 +76,14 @@ def audit_course(course_id: str) -> tuple[str, int, int]:
         doc = prod_db.collection("Lessons").document(lid).get()
         if not doc.exists:
             continue
-        lesson = doc.to_dict() or {}
-        if _has_zoom_with_passcode(lesson):
+        kind = _classify(doc.to_dict() or {})
+        if kind is None:
+            continue
+        if _already_uploaded(course_id, lid):
+            continue
+        if kind == "zoom":
             zoom += 1
-        if _has_vimeo(lesson):
+        elif kind == "vimeo":
             vimeo += 1
 
     return (title, zoom, vimeo)
