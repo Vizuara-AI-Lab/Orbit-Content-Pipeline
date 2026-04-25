@@ -257,8 +257,7 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list) -> dict:
     user = f"Topic ID: {topic_id} — {len(lesson_ids)} lesson(s)\n\n" + "\n\n".join(parts)
     questions = _llm_json_array(QUIZ_SYSTEM, user, max_tokens=8192)
     for q in questions:
-        if not q.get("id"):
-            q["id"] = f"q_{uuid.uuid4().hex[:8]}"
+        q["id"] = f"q_{uuid.uuid4().hex[:8]}"
     return {"topicId": topic_id, "sourceLessonIds": lesson_ids, "questions": questions}
 
 

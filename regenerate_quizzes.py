@@ -28,8 +28,6 @@ import traceback
 from run_content_pipeline import (
     prod_db,
     _fetch_all_lessons,
-    _get_video_url,
-    _extract_zoom_info,
     write_quiz,
 )
 from run_pipeline import (
@@ -66,7 +64,6 @@ Rules:
 
 Return ONLY a valid JSON array of exactly 20 objects:
 [{
-  "id": "q_<8-char hex>",
   "type": "multiple_choice" | "true_false",
   "text": "question text",
   "options": ["A","B","C","D"] | null,
@@ -136,8 +133,7 @@ def generate_quiz(course_id: str, topic_id: str, lesson_ids: list[str]) -> dict:
     questions = _llm_json_array(QUIZ_SYSTEM, user, max_tokens=8192)
 
     for q in questions:
-        if not q.get("id"):
-            q["id"] = f"q_{uuid.uuid4().hex[:8]}"
+        q["id"] = f"q_{uuid.uuid4().hex[:8]}"
 
     return {"topicId": topic_id, "sourceLessonIds": lesson_ids, "questions": questions}
 
@@ -156,20 +152,27 @@ def run_course(course_id: str):
         print(f"  [WARN] No lessons found for course {course_id}")
         return
 
-    # Build topic → lesson_ids mapping (same subset the main pipeline uses)
-    transcribable = [l for l in all_lessons if _get_video_url(l)]
-    zoom_lessons  = [l for l in all_lessons if not _get_video_url(l) and _extract_zoom_info(l.get("description", ""))]
-
+    # Build topic → lesson_ids mapping for lessons that actually have a
+    # transcript stored in Firestore. The presence of Transcripts/{course}_{lesson}
+    # is the only reliable signal — URL-based heuristics can disagree with what
+    # was actually transcribed.
     topics: dict[str, list[str]] = {}
-    for lesson in transcribable + zoom_lessons:
+    for lesson in all_lessons:
+        transcript_doc = prod_db.collection("Transcripts").document(
+            f"{course_id}_{lesson['id']}"
+        ).get()
+        if not transcript_doc.exists:
+            continue
+        if not (transcript_doc.to_dict() or {}).get("fullText", "").strip():
+            continue
         tid = lesson["topicId"]
         topics.setdefault(tid, []).append(lesson["id"])
 
     if not topics:
-        print("  [WARN] No transcribable lessons found — nothing to quiz.")
+        print("  [WARN] No transcripts found — nothing to quiz.")
         return
 
-    print(f"  Found {len(topics)} topic(s) with transcribable lessons.")
+    print(f"  Found {len(topics)} topic(s) with transcribed lessons.")
 
     for topic_id, lesson_ids in topics.items():
         print(f"\n  Topic {topic_id} ({len(lesson_ids)} lesson(s))")
