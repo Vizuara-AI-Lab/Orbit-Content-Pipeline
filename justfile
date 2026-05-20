@@ -26,6 +26,11 @@ run *course_ids:
 content *course_ids:
     {{ python }} run_content_pipeline.py {{ course_ids }}
 
+# Run only missing lecture-video transcripts on prod lessons
+# Usage: just transcripts --workers 4 --from-json courses-1.json
+transcripts *args:
+    {{ python }} run_transcript_pipeline.py {{ args }}
+
 # Verify that all required tools and env vars are present before running
 check:
     @echo "--- Checking tools ---"
