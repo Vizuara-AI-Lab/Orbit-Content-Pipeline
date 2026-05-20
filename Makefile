@@ -1,7 +1,9 @@
 PYTHON := .venv/bin/python
 PIP    := .venv/bin/pip
+WORKERS ?= 4
+COURSES_JSON ?= courses-1.json
 
-.PHONY: help install check run content
+.PHONY: help install check run content transcripts
 
 help:
 	@echo "Usage:"
@@ -9,6 +11,9 @@ help:
 	@echo "  make check                      Verify tools and env vars before running"
 	@echo "  make run COURSES='course_id_01 course_id_02'"
 	@echo "  make content COURSES='course_id_01 course_id_02'"
+	@echo "  make transcripts                Run missing transcript pipeline from courses-1.json"
+	@echo "  make transcripts WORKERS=8 COURSES_JSON=courses-1.json"
+	@echo "  make transcripts COURSES='course_id_01 course_id_02'"
 
 install:
 	python3 -m venv .venv
@@ -34,3 +39,10 @@ run:
 
 content:
 	$(PYTHON) run_content_pipeline.py $(COURSES)
+
+transcripts:
+ifdef COURSES
+	$(PYTHON) run_transcript_pipeline.py --workers $(WORKERS) $(COURSES)
+else
+	$(PYTHON) run_transcript_pipeline.py --workers $(WORKERS) --from-json $(COURSES_JSON)
+endif
