@@ -177,6 +177,9 @@ def _download_audio(url: str, output_dir: str) -> str:
     ]
     if cookies_file.exists():
         cmd += ["--cookies", str(cookies_file)]
+    yt_visitor_data = os.environ.get("YT_VISITOR_DATA")
+    if yt_visitor_data:
+        cmd += ["--extractor-args", f"youtube:visitor_data={yt_visitor_data}"]
     cmd.append(url)
 
     # Match the main content pipeline: yt-dlp may need Deno for YouTube's
