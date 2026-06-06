@@ -316,7 +316,7 @@ def _write_lesson_map_entry(course_id: str, course_name: str, lesson_id: str, le
 # PER-LESSON PROCESSOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", skip_summary: bool = False):
+def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", skip_summary: bool = False, skip_upload: bool = False):
     """
     Full pipeline for a single Zoom-recorded lesson.
     Idempotent — skips steps already recorded in _PipelineStateProd.
@@ -327,7 +327,8 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", ski
 
     # ── Step 1: Download → YouTube upload → Transcription ────────────────────
     transcript = None
-    if "youtube_upload" not in done or "transcription" not in done:
+    upload_needed = not skip_upload and "youtube_upload" not in done
+    if upload_needed or "transcription" not in done:
         zoom_info = _extract_zoom_info(lesson.get("description", ""))
         if not zoom_info:
             print(f"    [SKIP] No Zoom URL/passcode found in description — skipping.")
@@ -343,7 +344,9 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", ski
                 headless=True,
             )
 
-            if "youtube_upload" not in done:
+            if not upload_needed:
+                print("    [1/5] Skipping YouTube upload (--no-upload)." if skip_upload else "    [1/5] YouTube upload already done, skipping.")
+            elif "youtube_upload" not in done:
                 print("    [1/5] Uploading to YouTube (unlisted)...")
                 set_lesson_state(course_id, lesson_id, {"status": "uploading"})
                 youtube_url = _upload_to_youtube(
@@ -357,9 +360,6 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", ski
                 })
                 print(f"      → {youtube_url}")
                 _mark_step_done(course_id, lesson_id, "youtube_upload")
-            else:
-                print("    [1/5] YouTube upload already done, skipping.")
-
             if "transcription" not in done:
                 print("    [1/5] Transcribing...")
                 set_lesson_state(course_id, lesson_id, {"status": "transcribing"})
@@ -463,7 +463,7 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", ski
 # COURSE ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_zoom_course(course_id: str, skip_summary: bool = False):
+def run_zoom_course(course_id: str, skip_summary: bool = False, skip_upload: bool = False):
     print(f"\n{'='*60}")
     print(f"Zoom pipeline: {course_id}")
     print(f"{'='*60}")
@@ -492,7 +492,7 @@ def run_zoom_course(course_id: str, skip_summary: bool = False):
     for lesson in zoom_lessons:
         print(f"\n  → {lesson.get('title', lesson['id'])}")
         try:
-            process_zoom_lesson(course_id, lesson, course_name, skip_summary=skip_summary)
+            process_zoom_lesson(course_id, lesson, course_name, skip_summary=skip_summary, skip_upload=skip_upload)
         except Exception:
             print(f"  [ERROR] Lesson {lesson['id']} failed:")
             traceback.print_exc()
@@ -510,6 +510,7 @@ if __name__ == "__main__":
     parser = _argparse.ArgumentParser(description="Zoom recording pipeline.")
     parser.add_argument("course_ids", nargs="*", help="Course IDs to process.")
     parser.add_argument("--from-json", nargs="?", const="courses.json", metavar="FILE", help="Load course IDs from JSON.")
+    parser.add_argument("--no-upload", action="store_true", help="Skip YouTube upload.")
     parser.add_argument("--no-summary", action="store_true", help="Skip summary and figure generation.")
     _args = parser.parse_args()
 
@@ -525,4 +526,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
     for cid in ids:
-        run_zoom_course(cid, skip_summary=_args.no_summary)
+        run_zoom_course(cid, skip_summary=_args.no_summary, skip_upload=_args.no_upload)
