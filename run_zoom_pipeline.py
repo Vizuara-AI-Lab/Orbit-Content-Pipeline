@@ -316,7 +316,7 @@ def _write_lesson_map_entry(course_id: str, course_name: str, lesson_id: str, le
 # PER-LESSON PROCESSOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = ""):
+def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = "", skip_summary: bool = False):
     """
     Full pipeline for a single Zoom-recorded lesson.
     Idempotent — skips steps already recorded in _PipelineStateProd.
@@ -421,7 +421,10 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = ""):
         extraction = prod_db.collection("Lessons").document(lesson_id).get().to_dict()
 
     # ── Step 4: Summary Generation ────────────────────────────────────────────
-    if "summary" not in done:
+    if skip_summary:
+        print("    [4/5] Skipping summary (--no-summary).")
+        summary = None
+    elif "summary" not in done:
         print("    [4/5] Generating summary...")
         set_lesson_state(course_id, lesson_id, {"status": "summarizing"})
         summary = generate_summary(transcript, extraction, lesson.get("title", ""))
@@ -436,7 +439,9 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = ""):
         }
 
     # ── Step 5: Figure Generation ─────────────────────────────────────────────
-    if "figures" not in done:
+    if skip_summary:
+        print("    [5/5] Skipping figures (--no-summary).")
+    elif "figures" not in done:
         print(f"    [5/5] Generating {summary['figureCount']} figures...")
         set_lesson_state(course_id, lesson_id, {"status": "figures"})
         final_summary = generate_figures(course_id, lesson_id, summary)
@@ -458,14 +463,15 @@ def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = ""):
 # COURSE ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_zoom_course(course_id: str):
+def run_zoom_course(course_id: str, skip_summary: bool = False):
     print(f"\n{'='*60}")
     print(f"Zoom pipeline: {course_id}")
     print(f"{'='*60}")
 
-    if not prod_bucket:
-        raise RuntimeError("PROD_STORAGE_BUCKET is not set — required for figure uploads")
-    run_pipeline.orbit_bucket = prod_bucket  # redirect figure uploads to prod storage
+    if not skip_summary:
+        if not prod_bucket:
+            raise RuntimeError("PROD_STORAGE_BUCKET is not set — required for figure uploads")
+        run_pipeline.orbit_bucket = prod_bucket  # redirect figure uploads to prod storage
 
     course_name, all_lessons = _fetch_all_lessons(course_id)
     if not all_lessons:
@@ -486,7 +492,7 @@ def run_zoom_course(course_id: str):
     for lesson in zoom_lessons:
         print(f"\n  → {lesson.get('title', lesson['id'])}")
         try:
-            process_zoom_lesson(course_id, lesson, course_name)
+            process_zoom_lesson(course_id, lesson, course_name, skip_summary=skip_summary)
         except Exception:
             print(f"  [ERROR] Lesson {lesson['id']} failed:")
             traceback.print_exc()
@@ -498,21 +504,25 @@ def run_zoom_course(course_id: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse as _argparse
     import json as _json
 
-    args = sys.argv[1:]
-    if args and args[0] == "--from-json":
-        json_path = args[1] if len(args) > 1 else "courses.json"
-        with open(json_path) as f:
+    parser = _argparse.ArgumentParser(description="Zoom recording pipeline.")
+    parser.add_argument("course_ids", nargs="*", help="Course IDs to process.")
+    parser.add_argument("--from-json", nargs="?", const="courses.json", metavar="FILE", help="Load course IDs from JSON.")
+    parser.add_argument("--no-summary", action="store_true", help="Skip summary and figure generation.")
+    _args = parser.parse_args()
+
+    if _args.from_json:
+        with open(_args.from_json) as f:
             ids = [c.get("firestoreId") or c.get("id") for c in _json.load(f) if c.get("firestoreId") or c.get("id")]
-        print(f"Loaded {len(ids)} course ID(s) from {json_path}")
+        print(f"Loaded {len(ids)} course ID(s) from {_args.from_json}")
     else:
-        ids = args or COURSE_IDS
+        ids = _args.course_ids or COURSE_IDS
 
     if not ids:
-        print("Usage: python run_zoom_pipeline.py <course_id> [...]")
-        print("       python run_zoom_pipeline.py --from-json [courses.json]")
+        parser.print_help()
         sys.exit(1)
 
     for cid in ids:
-        run_zoom_course(cid)
+        run_zoom_course(cid, skip_summary=_args.no_summary)
