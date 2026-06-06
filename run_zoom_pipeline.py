@@ -270,11 +270,13 @@ def _generate_lesson_description(transcript: dict, lesson_title: str) -> str:
 
 
 
-def _fetch_all_lessons(course_id: str) -> list[dict]:
+def _fetch_all_lessons(course_id: str) -> tuple[str, list[dict]]:
     course_doc = prod_db.collection("Courses").document(course_id).get()
     if not course_doc.exists:
         raise ValueError(f"Course {course_id} not found in prod Firestore")
-    topics = course_doc.to_dict().get("topics", [])
+    course_data = course_doc.to_dict()
+    course_name = course_data.get("title") or course_data.get("name") or course_id
+    topics = course_data.get("topics", [])
     ordered_pairs = [
         (topic["id"], item["id"])
         for topic in topics
@@ -287,14 +289,34 @@ def _fetch_all_lessons(course_id: str) -> list[dict]:
         if not doc.exists:
             continue
         lessons.append({"id": lesson_id, "topicId": topic_id, **doc.to_dict()})
-    return lessons
+    return course_name, lessons
+
+
+LESSON_MAP_FILE = Path(__file__).parent / "zoom_lesson_map.json"
+
+
+def _write_lesson_map_entry(course_id: str, course_name: str, lesson_id: str, lesson_title: str, transcript: dict):
+    import json as _json
+    existing: dict = {}
+    if LESSON_MAP_FILE.exists():
+        try:
+            existing = _json.loads(LESSON_MAP_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing[lesson_id] = {
+        "courseId":    course_id,
+        "courseName":  course_name,
+        "lessonName":  lesson_title,
+        "transcript":  transcript.get("fullText", ""),
+    }
+    LESSON_MAP_FILE.write_text(_json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PER-LESSON PROCESSOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def process_zoom_lesson(course_id: str, lesson: dict):
+def process_zoom_lesson(course_id: str, lesson: dict, course_name: str = ""):
     """
     Full pipeline for a single Zoom-recorded lesson.
     Idempotent — skips steps already recorded in _PipelineStateProd.
@@ -356,7 +378,7 @@ def process_zoom_lesson(course_id: str, lesson: dict):
 
     if transcript is None:
         print("    [1/5] Transcription already done, loading...")
-        transcript = prod_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").get().to_dict()
+        transcript = prod_db.collection("Transcripts").document(f"{course_id}_{lesson_id}").get().to_dict() or {}
 
     # ── Step 2: Transcript Audit ──────────────────────────────────────────────
     if "audit" not in done:
@@ -423,6 +445,11 @@ def process_zoom_lesson(course_id: str, lesson: dict):
     else:
         print("    [5/5] Figures already done.")
 
+    try:
+        _write_lesson_map_entry(course_id, course_name, lesson_id, lesson.get("title", lesson_id), transcript)
+    except Exception:
+        print("    [WARN] Could not write zoom_lesson_map.json:")
+        traceback.print_exc()
     set_lesson_state(course_id, lesson_id, {"status": "done"})
     print("    ✓ Lesson complete")
 
@@ -440,7 +467,7 @@ def run_zoom_course(course_id: str):
         raise RuntimeError("PROD_STORAGE_BUCKET is not set — required for figure uploads")
     run_pipeline.orbit_bucket = prod_bucket  # redirect figure uploads to prod storage
 
-    all_lessons = _fetch_all_lessons(course_id)
+    course_name, all_lessons = _fetch_all_lessons(course_id)
     if not all_lessons:
         print(f"  [WARN] No lessons found for course {course_id}")
         return
@@ -459,7 +486,7 @@ def run_zoom_course(course_id: str):
     for lesson in zoom_lessons:
         print(f"\n  → {lesson.get('title', lesson['id'])}")
         try:
-            process_zoom_lesson(course_id, lesson)
+            process_zoom_lesson(course_id, lesson, course_name)
         except Exception:
             print(f"  [ERROR] Lesson {lesson['id']} failed:")
             traceback.print_exc()
