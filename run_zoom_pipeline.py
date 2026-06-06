@@ -477,7 +477,7 @@ if __name__ == "__main__":
     if args and args[0] == "--from-json":
         json_path = args[1] if len(args) > 1 else "courses.json"
         with open(json_path) as f:
-            ids = [c["firestoreId"] for c in _json.load(f) if c.get("firestoreId")]
+            ids = [c.get("firestoreId") or c.get("id") for c in _json.load(f) if c.get("firestoreId") or c.get("id")]
         print(f"Loaded {len(ids)} course ID(s) from {json_path}")
     else:
         ids = args or COURSE_IDS

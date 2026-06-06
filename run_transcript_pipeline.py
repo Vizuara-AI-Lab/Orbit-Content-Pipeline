@@ -11,6 +11,11 @@ Usage:
     python run_transcript_pipeline.py --workers 4 --from-json courses-1.json
 
 The JSON file may contain either {"id": "..."} or {"firestoreId": "..."} entries.
+
+YouTube rate-limit/auth controls:
+    YT_COOKIES_FILE=/path/to/cookies.txt       Defaults to ./yt-cookies.txt
+    YT_COOKIES_FROM_BROWSER=chrome|firefox     Used when no cookies file exists
+    YT_DLP_SLEEP_REQUESTS=1                    Delay between yt-dlp HTTP requests
 """
 
 from __future__ import annotations
@@ -67,6 +72,11 @@ _PREVIEW_URL_PATTERN = re.compile(r"(youtube\.com|youtu\.be|vimeo\.com)", re.IGN
 
 
 DEFAULT_WORKERS = 3
+DEFAULT_YT_SLEEP_REQUESTS = 1.0
+DEFAULT_YT_SLEEP_INTERVAL = 2.0
+DEFAULT_YT_MAX_SLEEP_INTERVAL = 8.0
+DEFAULT_YT_RETRIES = 5
+DEFAULT_YT_EXTRACTOR_RETRIES = 5
 
 
 @dataclass(frozen=True)
@@ -162,7 +172,7 @@ def _download_audio(url: str, output_dir: str) -> str:
         urllib.request.urlretrieve(url, output_path)
         return output_path
 
-    cookies_file = Path(__file__).parent / "yt-cookies.txt"
+    cookies_file = _yt_cookies_file()
     cmd = [
         YT_DLP,
         "--format",
@@ -174,9 +184,23 @@ def _download_audio(url: str, output_dir: str) -> str:
         "never",
         "--remote-components",
         "ejs:github",
+        "--retries",
+        _env_str("YT_DLP_RETRIES", DEFAULT_YT_RETRIES),
+        "--fragment-retries",
+        _env_str("YT_DLP_FRAGMENT_RETRIES", DEFAULT_YT_RETRIES),
+        "--extractor-retries",
+        _env_str("YT_DLP_EXTRACTOR_RETRIES", DEFAULT_YT_EXTRACTOR_RETRIES),
+        "--sleep-requests",
+        _env_str("YT_DLP_SLEEP_REQUESTS", DEFAULT_YT_SLEEP_REQUESTS),
+        "--sleep-interval",
+        _env_str("YT_DLP_SLEEP_INTERVAL", DEFAULT_YT_SLEEP_INTERVAL),
+        "--max-sleep-interval",
+        _env_str("YT_DLP_MAX_SLEEP_INTERVAL", DEFAULT_YT_MAX_SLEEP_INTERVAL),
     ]
     if cookies_file.exists():
         cmd += ["--cookies", str(cookies_file)]
+    elif os.environ.get("YT_COOKIES_FROM_BROWSER"):
+        cmd += ["--cookies-from-browser", os.environ["YT_COOKIES_FROM_BROWSER"]]
     yt_visitor_data = os.environ.get("YT_VISITOR_DATA")
     if yt_visitor_data:
         cmd += ["--extractor-args", f"youtube:visitor_data={yt_visitor_data}"]
@@ -187,12 +211,43 @@ def _download_audio(url: str, output_dir: str) -> str:
     env = {**os.environ, "PATH": os.environ.get("PATH", "") + os.pathsep + "/home/teamvizuara/.deno/bin"}
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=output_dir, env=env)
     if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {result.stderr[:1000]}")
+        raise RuntimeError(_format_ytdlp_error(result.stderr))
 
     for f in Path(output_dir).iterdir():
         if f.stem == "audio":
             return str(f)
     raise RuntimeError("yt-dlp succeeded but no audio file found in output dir")
+
+
+def _yt_cookies_file() -> Path:
+    configured = os.environ.get("YT_COOKIES_FILE")
+    return Path(configured).expanduser() if configured else Path(__file__).parent / "yt-cookies.txt"
+
+
+def _env_str(name: str, default: float | int) -> str:
+    return str(os.environ.get(name, default))
+
+
+def _format_ytdlp_error(stderr: str) -> str:
+    stderr = stderr.strip()
+    message = f"yt-dlp failed: {stderr[:1000]}"
+    if "HTTP Error 429" in stderr or "Sign in to confirm" in stderr or "not a bot" in stderr:
+        cookies_file = _yt_cookies_file()
+        message += (
+            "\n\nYouTube is rate-limiting or requiring authentication. Export fresh YouTube cookies to "
+            f"{cookies_file}, or set YT_COOKIES_FILE=/path/to/cookies.txt. On a machine with a browser profile, "
+            "you can instead set YT_COOKIES_FROM_BROWSER=chrome or YT_COOKIES_FROM_BROWSER=firefox."
+        )
+    return message
+
+
+def _describe_ytdlp_auth() -> str:
+    cookies_file = _yt_cookies_file()
+    if cookies_file.exists():
+        return f"cookies file: {cookies_file}"
+    if os.environ.get("YT_COOKIES_FROM_BROWSER"):
+        return f"browser cookies: {os.environ['YT_COOKIES_FROM_BROWSER']}"
+    return "no cookies configured"
 
 
 def _is_direct_file(url: str) -> bool:
@@ -441,6 +496,7 @@ def main(argv: list[str]) -> int:
     print(f"Transcript-only pipeline")
     print(f"Courses: {len(course_ids)}")
     print(f"Workers: {workers}")
+    print(f"yt-dlp auth: {_describe_ytdlp_auth()}")
 
     jobs, stats = _build_jobs(course_ids)
     print(
